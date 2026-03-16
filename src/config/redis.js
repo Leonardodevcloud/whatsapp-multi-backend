@@ -10,22 +10,45 @@ let redis = null;
 function criarConexaoRedis() {
   if (redis) return redis;
 
-  redis = new Redis(env.REDIS_URL, {
+  const redisUrl = env.REDIS_URL;
+
+  // Railway Redis pode usar rediss:// (TLS) — ioredis precisa de config especial
+  const opcoes = {
     maxRetriesPerRequest: null, // BullMQ exige null
     enableReadyCheck: true,
+    lazyConnect: false,
     retryStrategy(times) {
-      const delay = Math.min(times * 500, 30000);
+      if (times > 20) {
+        logger.error('[Redis] Máximo de tentativas atingido');
+        return null;
+      }
+      const delay = Math.min(times * 1000, 30000);
       logger.warn({ tentativa: times, delay }, '[Redis] Reconectando...');
       return delay;
     },
-  });
+    reconnectOnError(err) {
+      const targetErrors = ['READONLY', 'ECONNRESET', 'ECONNREFUSED'];
+      return targetErrors.some(e => err.message.includes(e));
+    },
+  };
+
+  // Se a URL usa rediss:// (TLS), configurar TLS
+  if (redisUrl.startsWith('rediss://')) {
+    opcoes.tls = { rejectUnauthorized: false };
+  }
+
+  redis = new Redis(redisUrl, opcoes);
 
   redis.on('connect', () => {
     logger.info('[Redis] Conectado');
   });
 
+  redis.on('ready', () => {
+    logger.info('[Redis] Pronto para uso');
+  });
+
   redis.on('error', (err) => {
-    logger.error({ err }, '[Redis] Erro de conexão');
+    logger.error({ erro: err.message }, '[Redis] Erro de conexão');
   });
 
   redis.on('close', () => {

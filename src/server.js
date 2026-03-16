@@ -244,11 +244,17 @@ process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 process.on('unhandledRejection', (reason, promise) => {
-  logger.error({ reason }, '[Server] Unhandled Rejection');
+  logger.error({ reason: String(reason) }, '[Server] Unhandled Rejection');
 });
 
 process.on('uncaughtException', (err) => {
-  logger.error({ err }, '[Server] Uncaught Exception');
+  logger.error({ err: err.message, stack: err.stack }, '[Server] Uncaught Exception');
+  // Não crashar em erros de Redis/conexão — deixar o retry resolver
+  if (err.message && (err.message.includes('ECONNREFUSED') || err.message.includes('ECONNRESET') || err.message.includes('Redis'))) {
+    logger.warn('[Server] Erro de conexão — mantendo processo ativo');
+    return;
+  }
+  // Erros críticos desconhecidos — crashar
   process.exit(1);
 });
 
