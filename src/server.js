@@ -169,16 +169,20 @@ async function iniciar() {
     inicializarMessageWorker(redis);
     logger.info('[Server] Message Worker inicializado');
 
-    // 7. Inicializar WhatsApp (conexão Baileys)
-    await inicializarWhatsApp(broadcast);
-    logger.info('[Server] WhatsApp inicializado');
-
-    // 8. Subir servidor HTTP
+    // 7. Subir servidor HTTP ANTES do WhatsApp (pra health check funcionar)
     server.listen(env.PORT, () => {
       logger.info(`[Server] Rodando na porta ${env.PORT}`);
       logger.info(`[Server] Frontend URL: ${env.FRONTEND_URL}`);
       logger.info('========================================');
     });
+
+    // 8. Inicializar WhatsApp (conexão Baileys) — em try/catch separado pra não derrubar o server
+    try {
+      await inicializarWhatsApp(broadcast);
+      logger.info('[Server] WhatsApp inicializado');
+    } catch (err) {
+      logger.error({ err: err.message }, '[Server] WhatsApp falhou ao inicializar — servidor continua rodando sem WhatsApp');
+    }
   } catch (err) {
     logger.error({ err }, '[Server] Falha na inicialização');
     process.exit(1);

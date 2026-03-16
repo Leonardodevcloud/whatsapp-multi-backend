@@ -146,7 +146,7 @@ class WhatsAppConnection extends EventEmitter {
 
       logger.info('[WhatsApp] Socket criado, aguardando conexão...');
     } catch (err) {
-      logger.error({ err }, '[WhatsApp] Erro ao iniciar conexão');
+      logger.error({ err: err.message, stack: err.stack }, '[WhatsApp] Erro ao iniciar conexão');
       this._agendarReconexao();
     }
   }
