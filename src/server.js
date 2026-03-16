@@ -253,13 +253,9 @@ process.on('unhandledRejection', (reason, promise) => {
 
 process.on('uncaughtException', (err) => {
   logger.error({ err: err.message, stack: err.stack }, '[Server] Uncaught Exception');
-  // Não crashar em erros de Redis/conexão — deixar o retry resolver
-  if (err.message && (err.message.includes('ECONNREFUSED') || err.message.includes('ECONNRESET') || err.message.includes('Redis'))) {
-    logger.warn('[Server] Erro de conexão — mantendo processo ativo');
-    return;
-  }
-  // Erros críticos desconhecidos — crashar
-  process.exit(1);
+  // NUNCA crashar — Baileys gera uncaught exceptions durante reconexão
+  // O processo precisa sobreviver pra atender requests HTTP
+  logger.warn('[Server] Processo mantido ativo apesar do erro');
 });
 
 // Iniciar

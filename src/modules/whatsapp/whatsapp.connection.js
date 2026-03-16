@@ -114,11 +114,23 @@ class WhatsAppConnection extends EventEmitter {
 
       const { state, saveCreds } = await this.usePostgresAuthState();
 
+      // Logger silencioso pra Baileys — evita uncaught exceptions
+      const baileysLogger = {
+        level: 'silent',
+        trace: () => {},
+        debug: () => {},
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+        fatal: () => {},
+        child: () => baileysLogger,
+      };
+
       this.sock = makeWASocket({
         version,
         auth: state,
         printQRInTerminal: false,
-        logger: logger.child({ modulo: 'baileys' }),
+        logger: baileysLogger,
         browser: ['Central Tutts WA', 'Chrome', '120.0.0'],
         generateHighQualityLinkPreview: false,
         syncFullHistory: false,
