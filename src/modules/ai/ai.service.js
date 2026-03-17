@@ -295,11 +295,103 @@ Se o texto já estiver correto, retorne ele sem alterações.`,
   }
 }
 
+/**
+ * Transcrever áudio de uma mensagem
+ * Baixa o áudio da URL, envia pro Gemini como inline_data, retorna transcrição
+ * Salva no banco pra não precisar transcrever de novo
+ */
+async function transcreverAudio(mensagemId) {
+  // Verificar se já tem transcrição salva
+  const msg = await query(`SELECT id, media_url, tipo, corpo FROM mensagens WHERE id = $1`, [mensagemId]);
+  if (msg.rows.length === 0) throw new AppError('Mensagem não encontrada', 404);
+  if (msg.rows[0].tipo !== 'audio') throw new AppError('Mensagem não é um áudio', 400);
+
+  // Se corpo já tem transcrição (não é só emoji)
+  const corpoAtual = msg.rows[0].corpo;
+  if (corpoAtual && corpoAtual.length > 20 && !corpoAtual.startsWith('🎵')) {
+    return { transcricao: corpoAtual, fonte: 'cache' };
+  }
+
+  const mediaUrl = msg.rows[0].media_url;
+  if (!mediaUrl) throw new AppError('Áudio sem URL disponível', 400);
+
+  if (!GEMINI_API_KEY) throw new AppError('GEMINI_API_KEY não configurada', 503);
+
+  try {
+    let audioBase64, mimeType;
+
+    // Se media_url é data URI (base64)
+    if (mediaUrl.startsWith('data:')) {
+      const match = mediaUrl.match(/^data:([^;]+);base64,(.+)$/);
+      if (match) {
+        mimeType = match[1];
+        audioBase64 = match[2];
+      }
+    } else {
+      // Baixar áudio da URL
+      const response = await fetch(mediaUrl);
+      if (!response.ok) throw new Error('Falha ao baixar áudio');
+      const buffer = await response.arrayBuffer();
+      audioBase64 = Buffer.from(buffer).toString('base64');
+      mimeType = response.headers.get('content-type') || 'audio/ogg';
+    }
+
+    if (!audioBase64) throw new Error('Não foi possível obter o áudio');
+
+    // Chamar Gemini com áudio inline
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
+    
+    const geminiResponse = await fetch(geminiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          parts: [
+            {
+              inline_data: {
+                mime_type: mimeType,
+                data: audioBase64,
+              }
+            },
+            {
+              text: 'Transcreva este áudio em português brasileiro. Retorne APENAS o texto transcrito, sem aspas, prefixos ou explicações. Se não conseguir entender, retorne "[Áudio inaudível]".'
+            }
+          ]
+        }],
+        generationConfig: { maxOutputTokens: 1000, temperature: 0.1 },
+      }),
+    });
+
+    if (!geminiResponse.ok) {
+      const erro = await geminiResponse.text();
+      logger.error({ status: geminiResponse.status, erro }, '[AI] Erro Gemini transcrição');
+      throw new Error('Falha na transcrição');
+    }
+
+    const data = await geminiResponse.json();
+    const transcricao = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '[Transcrição indisponível]';
+
+    // Salvar transcrição no banco (atualizar corpo da mensagem)
+    await query(
+      `UPDATE mensagens SET corpo = $1, atualizado_em = NOW() WHERE id = $2`,
+      [transcricao, mensagemId]
+    );
+
+    logger.info({ mensagemId, transcricaoLen: transcricao.length }, '[AI] Áudio transcrito');
+
+    return { transcricao, fonte: 'gemini' };
+  } catch (err) {
+    logger.error({ err: err.message, mensagemId }, '[AI] Erro ao transcrever áudio');
+    throw new AppError(`Falha na transcrição: ${err.message}`, 500);
+  }
+}
+
 module.exports = {
   gerarSugestao,
   gerarResumo,
   classificarFila,
   detectarSentimento,
   melhorarTexto,
+  transcreverAudio,
   iaEstaAtiva,
 };

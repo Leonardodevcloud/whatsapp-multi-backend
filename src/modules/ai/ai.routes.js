@@ -51,4 +51,12 @@ router.post('/melhorar-texto', verificarToken, limiteSensivel, async (req, res, 
   } catch (err) { next(err); }
 });
 
+// POST /api/ai/transcrever-audio/:mensagemId — transcrever áudio de uma mensagem
+router.post('/transcrever-audio/:mensagemId', verificarToken, limiteSensivel, async (req, res, next) => {
+  try {
+    const resultado = await aiService.transcreverAudio(req.params.mensagemId);
+    res.json(resultado);
+  } catch (err) { next(err); }
+});
+
 module.exports = router;
