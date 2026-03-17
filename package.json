@@ -1,20 +1,17 @@
 {
   "name": "whatsapp-multiattendimento",
-  "version": "1.0.0",
-  "description": "Aplicação de multi-atendimento WhatsApp com Baileys",
+  "version": "2.0.0",
+  "description": "Multi-atendimento WhatsApp com Cloud API",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "node --watch src/server.js",
-    "worker": "node src/workers/messageWorker.js"
+    "dev": "node --watch src/server.js"
   },
   "engines": {
     "node": ">=20.0.0"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.7.16",
     "bcrypt": "^5.1.1",
-    "bullmq": "^5.34.8",
     "compression": "^1.7.4",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",

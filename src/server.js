@@ -39,9 +39,6 @@ const { initReportsRoutes } = require('./modules/reports');
 // WebSocket
 const { inicializarWebSocket, broadcast, obterContagemConectados } = require('./websocket');
 
-// Workers
-const { inicializarMessageWorker } = require('./workers/messageWorker');
-
 // WhatsApp Connection (para status no health check)
 const conexaoWA = require('./modules/whatsapp/whatsapp.connection');
 
@@ -165,23 +162,19 @@ async function iniciar() {
     inicializarWebSocket(server);
     logger.info('[Server] WebSocket inicializado');
 
-    // 6. Inicializar Message Worker (no mesmo processo)
-    inicializarMessageWorker(redis);
-    logger.info('[Server] Message Worker inicializado');
-
-    // 7. Subir servidor HTTP ANTES do WhatsApp (pra health check funcionar)
+    // 6. Subir servidor HTTP ANTES do WhatsApp
     server.listen(env.PORT, () => {
       logger.info(`[Server] Rodando na porta ${env.PORT}`);
       logger.info(`[Server] Frontend URL: ${env.FRONTEND_URL}`);
       logger.info('========================================');
     });
 
-    // 8. Inicializar WhatsApp (conexão Baileys) — em try/catch separado pra não derrubar o server
+    // 7. Inicializar WhatsApp Cloud API
     try {
       await inicializarWhatsApp(broadcast);
-      logger.info('[Server] WhatsApp inicializado');
+      logger.info('[Server] WhatsApp Cloud API inicializado');
     } catch (err) {
-      logger.error({ err: err.message }, '[Server] WhatsApp falhou ao inicializar — servidor continua rodando sem WhatsApp');
+      logger.error({ err: err.message }, '[Server] WhatsApp falhou — servidor continua rodando');
     }
   } catch (err) {
     logger.error({ err }, '[Server] Falha na inicialização');

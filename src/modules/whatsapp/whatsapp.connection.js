@@ -1,416 +1,179 @@
 // src/modules/whatsapp/whatsapp.connection.js
-// Gerenciamento de conexão Baileys — sessão PostgreSQL, reconexão, QR, eventos
+// WhatsApp Cloud API (Meta) — sem Baileys, HTTP puro
 
-const {
-  default: makeWASocket,
-  DisconnectReason,
-  fetchLatestBaileysVersion,
-  makeCacheableSignalKeyStore,
-  initAuthCreds,
-  isJidBroadcast,
-  isJidStatusBroadcast,
-} = require('@whiskeysockets/baileys');
 const { EventEmitter } = require('events');
-const { query } = require('../../config/database');
 const logger = require('../../shared/logger');
+
+const GRAPH_API = 'https://graph.facebook.com/v21.0';
 
 class WhatsAppConnection extends EventEmitter {
   constructor() {
     super();
-    this.sock = null;
-    this.status = 'desconectado'; // desconectado | escaneando_qr | conectado
-    this.qrCode = null;
-    this.tentativasReconexao = 0;
-    this.maxTentativas = 10;
-    this.timerReconexao = null;
+    this.status = 'desconectado';
     this.inicioConexao = null;
     this.infoUsuario = null;
+    this.phoneNumberId = null;
+    this.accessToken = null;
+    this.webhookVerifyToken = null;
   }
 
   /**
-   * Auth state persistido no PostgreSQL (tabela whatsapp_sessoes)
-   * Substitui arquivo local — essencial para containers Railway
-   */
-  async usePostgresAuthState() {
-    const SESSAO_ID = 'principal';
-
-    const writeData = async (id, dados) => {
-      const valor = JSON.stringify(dados, (key, value) =>
-        typeof value === 'bigint' ? value.toString() : value
-      );
-      await query(
-        `INSERT INTO whatsapp_sessoes (sessao_id, dados, atualizado_em)
-         VALUES ($1, $2, NOW())
-         ON CONFLICT (sessao_id)
-         DO UPDATE SET dados = $2, atualizado_em = NOW()`,
-        [`${SESSAO_ID}:${id}`, valor]
-      );
-    };
-
-    const readData = async (id) => {
-      try {
-        const resultado = await query(
-          `SELECT dados FROM whatsapp_sessoes WHERE sessao_id = $1`,
-          [`${SESSAO_ID}:${id}`]
-        );
-        if (resultado.rows.length === 0) return null;
-        return typeof resultado.rows[0].dados === 'string'
-          ? JSON.parse(resultado.rows[0].dados)
-          : resultado.rows[0].dados;
-      } catch {
-        return null;
-      }
-    };
-
-    const removeData = async (id) => {
-      await query(`DELETE FROM whatsapp_sessoes WHERE sessao_id = $1`, [`${SESSAO_ID}:${id}`]);
-    };
-
-    // Carregar creds existentes ou criar novas
-    const creds = await readData('creds') || initAuthCreds();
-
-    return {
-      state: {
-        creds,
-        keys: makeCacheableSignalKeyStore(
-          {
-            get: async (type, ids) => {
-              const dados = {};
-              for (const id of ids) {
-                const valor = await readData(`${type}-${id}`);
-                if (valor) dados[id] = valor;
-              }
-              return dados;
-            },
-            set: async (data) => {
-              for (const [type, entries] of Object.entries(data)) {
-                for (const [id, valor] of Object.entries(entries)) {
-                  if (valor) {
-                    await writeData(`${type}-${id}`, valor);
-                  } else {
-                    await removeData(`${type}-${id}`);
-                  }
-                }
-              }
-            },
-          },
-          logger.child({ modulo: 'signal-keys' })
-        ),
-      },
-      saveCreds: async () => {
-        if (this.sock?.authState?.creds) {
-          await writeData('creds', this.sock.authState.creds);
-        }
-      },
-    };
-  }
-
-  /**
-   * Iniciar conexão WhatsApp
+   * Inicializar com credenciais da Meta
    */
   async conectar() {
-    // SEMPRE destruir socket anterior antes de criar novo
-    if (this.sock) {
-      try {
-        this.sock.ev.removeAllListeners();
-        await this.sock.end();
-      } catch {
-        // Ignorar
-      }
-      this.sock = null;
-    }
+    this.phoneNumberId = process.env.WA_PHONE_NUMBER_ID;
+    this.accessToken = process.env.WA_ACCESS_TOKEN;
+    this.webhookVerifyToken = process.env.WA_WEBHOOK_VERIFY_TOKEN || 'centraltutts_webhook_2026';
 
-    // Cancelar reconexão pendente
-    if (this.timerReconexao) {
-      clearTimeout(this.timerReconexao);
-      this.timerReconexao = null;
-    }
-
-    try {
-      const { version } = await fetchLatestBaileysVersion();
-      logger.info({ version }, '[WhatsApp] Versão Baileys');
-
-      const { state, saveCreds } = await this.usePostgresAuthState();
-
-      // Logger pino com nível warn pro Baileys
-      const pino = require('pino');
-      const baileysLogger = pino({ level: 'warn' });
-
-      this.sock = makeWASocket({
-        version,
-        auth: state,
-        printQRInTerminal: false,
-        logger: baileysLogger,
-        browser: ['Central Tutts WA', 'Chrome', '120.0.0'],
-        generateHighQualityLinkPreview: false,
-        syncFullHistory: false,
-        markOnlineOnConnect: true,
-        qrTimeout: 60000, // 60 segundos pra escanear antes de gerar novo
-        getMessage: async () => undefined,
-      });
-
-      // Salvar credenciais quando atualizadas
-      this.sock.ev.on('creds.update', saveCreds);
-
-      // Evento de atualização de conexão
-      this.sock.ev.on('connection.update', (update) => {
-        this._handleConnectionUpdate(update);
-      });
-
-      // Mensagens recebidas
-      this.sock.ev.on('messages.upsert', (msg) => {
-        this._handleMessagesUpsert(msg);
-      });
-
-      // Status de mensagem (entregue, lida)
-      this.sock.ev.on('messages.update', (updates) => {
-        this.emit('messages.update', updates);
-      });
-
-      logger.info('[WhatsApp] Socket criado, aguardando conexão...');
-    } catch (err) {
-      logger.error({ err: err.message, stack: err.stack }, '[WhatsApp] Erro ao iniciar conexão');
-      this._agendarReconexao();
-    }
-  }
-
-  /**
-   * Handler de atualização de conexão
-   */
-  _handleConnectionUpdate(update) {
-    const { connection, lastDisconnect, qr } = update;
-
-    if (qr) {
-      // Só emitir se o QR realmente mudou
-      if (this.qrCode !== qr) {
-        this.qrCode = qr;
-        this.status = 'escaneando_qr';
-        this.emit('qr', qr);
-        logger.info('[WhatsApp] Novo QR code gerado');
-      }
-    }
-
-    if (connection === 'close') {
+    if (!this.phoneNumberId || !this.accessToken) {
+      logger.warn('[WhatsApp] WA_PHONE_NUMBER_ID ou WA_ACCESS_TOKEN não configurados — WhatsApp desativado');
       this.status = 'desconectado';
-      this.qrCode = null;
-      this.inicioConexao = null;
-      this.infoUsuario = null;
-
-      const statusCode = lastDisconnect?.error?.output?.statusCode;
-      const motivo = DisconnectReason[statusCode] || statusCode;
-
-      logger.warn({ statusCode, motivo }, '[WhatsApp] Conexão fechada');
-
-      // 401 = Logged out (QR invalidado) — limpar sessão e reconectar
-      if (statusCode === DisconnectReason.loggedOut) {
-        logger.info('[WhatsApp] Sessão invalidada, limpando dados...');
-        this._limparSessao().then(() => this._agendarReconexao());
-        return;
-      }
-
-      // 515 = Restart required
-      // Qualquer outro erro = tentar reconectar
-      if (statusCode !== DisconnectReason.loggedOut) {
-        this._agendarReconexao();
-      }
-
-      this.emit('desconectado', { statusCode, motivo });
-    }
-
-    if (connection === 'open') {
-      this.status = 'conectado';
-      this.qrCode = null;
-      this.tentativasReconexao = 0;
-      this.inicioConexao = new Date();
-      this.infoUsuario = this.sock?.user || null;
-
-      logger.info(
-        { usuario: this.infoUsuario?.name, numero: this.infoUsuario?.id },
-        '[WhatsApp] Conectado com sucesso!'
-      );
-
-      this.emit('conectado', this.infoUsuario);
-    }
-  }
-
-  /**
-   * Handler de mensagens recebidas
-   */
-  _handleMessagesUpsert({ messages, type }) {
-    if (type !== 'notify') return;
-
-    for (const msg of messages) {
-      // Ignorar broadcasts e status
-      if (!msg.key?.remoteJid) continue;
-      if (isJidBroadcast(msg.key.remoteJid)) continue;
-      if (isJidStatusBroadcast(msg.key.remoteJid)) continue;
-
-      // Ignorar mensagens de grupo (por enquanto)
-      if (msg.key.remoteJid.endsWith('@g.us')) continue;
-
-      // Ignorar mensagens do próprio bot (enviadas por nós)
-      if (msg.key.fromMe) {
-        this.emit('mensagem.enviada', msg);
-        continue;
-      }
-
-      this.emit('mensagem.recebida', msg);
-    }
-  }
-
-  /**
-   * Reconexão com backoff exponencial
-   */
-  _agendarReconexao() {
-    if (this.tentativasReconexao >= this.maxTentativas) {
-      logger.error('[WhatsApp] Máximo de tentativas de reconexão atingido');
-      this.emit('reconexao.falhou');
       return;
     }
 
-    const delay = Math.min(1000 * Math.pow(2, this.tentativasReconexao), 60000);
-    this.tentativasReconexao++;
-
-    logger.info(
-      { tentativa: this.tentativasReconexao, delay: `${delay}ms` },
-      '[WhatsApp] Agendando reconexão...'
-    );
-
-    if (this.timerReconexao) clearTimeout(this.timerReconexao);
-
-    this.timerReconexao = setTimeout(() => {
-      this.conectar();
-    }, delay);
-  }
-
-  /**
-   * Limpar dados de sessão no PostgreSQL
-   */
-  async _limparSessao() {
     try {
-      await query(`DELETE FROM whatsapp_sessoes WHERE sessao_id LIKE 'principal:%'`);
-      logger.info('[WhatsApp] Dados de sessão removidos');
+      const response = await fetch(`${GRAPH_API}/${this.phoneNumberId}`, {
+        headers: { 'Authorization': `Bearer ${this.accessToken}` },
+      });
+
+      if (!response.ok) {
+        const erro = await response.text();
+        logger.error({ status: response.status, erro }, '[WhatsApp] Credenciais inválidas');
+        this.status = 'desconectado';
+        return;
+      }
+
+      const data = await response.json();
+      this.infoUsuario = {
+        name: data.verified_name || data.display_phone_number || 'WhatsApp Business',
+        id: data.display_phone_number || this.phoneNumberId,
+      };
+      this.status = 'conectado';
+      this.inicioConexao = new Date();
+
+      logger.info({ nome: this.infoUsuario.name, numero: this.infoUsuario.id }, '[WhatsApp] Cloud API conectada!');
+      this.emit('conectado', this.infoUsuario);
     } catch (err) {
-      logger.error({ err }, '[WhatsApp] Erro ao limpar sessão');
+      logger.error({ err: err.message }, '[WhatsApp] Erro ao conectar Cloud API');
+      this.status = 'desconectado';
     }
   }
 
   /**
    * Enviar mensagem de texto
    */
-  async enviarTexto(jid, texto) {
-    if (this.status !== 'conectado' || !this.sock) {
-      throw new Error('WhatsApp não está conectado');
-    }
-    return this.sock.sendMessage(jid, { text: texto });
+  async enviarTexto(telefone, texto) {
+    this._verificarConectado();
+
+    const data = await this._chamarAPI('messages', {
+      messaging_product: 'whatsapp',
+      to: telefone,
+      type: 'text',
+      text: { body: texto },
+    });
+
+    const waMessageId = data.messages?.[0]?.id;
+    logger.info({ telefone, waMessageId }, '[WhatsApp] Mensagem enviada');
+    return { key: { id: waMessageId } };
   }
 
   /**
-   * Enviar mídia (imagem, audio, video, documento)
+   * Enviar mídia
    */
-  async enviarMidia(jid, tipo, buffer, opcoes = {}) {
-    if (this.status !== 'conectado' || !this.sock) {
-      throw new Error('WhatsApp não está conectado');
-    }
+  async enviarMidia(telefone, tipo, mediaUrl, opcoes = {}) {
+    this._verificarConectado();
 
-    const payload = {};
+    const payload = { messaging_product: 'whatsapp', to: telefone };
+
     switch (tipo) {
       case 'imagem':
-        payload.image = buffer;
-        if (opcoes.caption) payload.caption = opcoes.caption;
+        payload.type = 'image';
+        payload.image = { link: mediaUrl, ...(opcoes.caption && { caption: opcoes.caption }) };
         break;
       case 'audio':
-        payload.audio = buffer;
-        payload.mimetype = 'audio/ogg; codecs=opus';
-        payload.ptt = opcoes.ptt !== false;
+        payload.type = 'audio';
+        payload.audio = { link: mediaUrl };
         break;
       case 'video':
-        payload.video = buffer;
-        if (opcoes.caption) payload.caption = opcoes.caption;
+        payload.type = 'video';
+        payload.video = { link: mediaUrl, ...(opcoes.caption && { caption: opcoes.caption }) };
         break;
       case 'documento':
-        payload.document = buffer;
-        payload.mimetype = opcoes.mimetype || 'application/octet-stream';
-        payload.fileName = opcoes.fileName || 'arquivo';
+        payload.type = 'document';
+        payload.document = { link: mediaUrl, filename: opcoes.fileName || 'arquivo' };
         break;
       default:
-        throw new Error(`Tipo de mídia não suportado: ${tipo}`);
+        throw new Error(`Tipo não suportado: ${tipo}`);
     }
 
-    return this.sock.sendMessage(jid, payload);
+    const data = await this._chamarAPI('messages', payload);
+    return { key: { id: data.messages?.[0]?.id } };
   }
 
   /**
    * Marcar mensagem como lida
    */
-  async marcarComoLida(jid, messageKeys) {
-    if (this.status !== 'conectado' || !this.sock) return;
+  async marcarComoLida(waMessageId) {
+    if (this.status !== 'conectado' || !waMessageId) return;
     try {
-      await this.sock.readMessages(messageKeys);
-    } catch (err) {
-      logger.error({ err, jid }, '[WhatsApp] Erro ao marcar como lida');
+      await this._chamarAPI('messages', {
+        messaging_product: 'whatsapp',
+        status: 'read',
+        message_id: waMessageId,
+      });
+    } catch {
+      // Não crítico
     }
   }
 
   /**
-   * Obter status da conexão para health check
+   * Chamar Graph API
    */
+  async _chamarAPI(endpoint, body) {
+    const response = await fetch(`${GRAPH_API}/${this.phoneNumberId}/${endpoint}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${this.accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const erro = await response.json().catch(() => ({}));
+      const msg = erro.error?.message || `HTTP ${response.status}`;
+      logger.error({ erro: msg, endpoint }, '[WhatsApp] Erro na API');
+      throw new Error(msg);
+    }
+
+    return response.json();
+  }
+
+  _verificarConectado() {
+    if (this.status !== 'conectado') {
+      throw new Error('WhatsApp Cloud API não está conectada');
+    }
+  }
+
   obterStatus() {
     return {
       status: this.status,
       conectado: this.status === 'conectado',
+      tipo: 'cloud_api',
       tempoOnline: this.inicioConexao
         ? Math.floor((Date.now() - this.inicioConexao.getTime()) / 1000)
         : 0,
-      usuario: this.infoUsuario
-        ? { nome: this.infoUsuario.name, numero: this.infoUsuario.id }
-        : null,
-      tentativasReconexao: this.tentativasReconexao,
-      qrDisponivel: !!this.qrCode,
+      usuario: this.infoUsuario,
+      qrDisponivel: false,
     };
   }
 
-  /**
-   * Desconectar gracefully
-   */
   async desconectar() {
-    if (this.timerReconexao) {
-      clearTimeout(this.timerReconexao);
-      this.timerReconexao = null;
-    }
-
-    if (this.sock) {
-      try {
-        await this.sock.end();
-      } catch {
-        // Ignorar erros no shutdown
-      }
-      this.sock = null;
-    }
-
     this.status = 'desconectado';
-    this.qrCode = null;
-    logger.info('[WhatsApp] Desconectado gracefully');
-  }
-
-  /**
-   * Forçar logout (invalidar sessão)
-   */
-  async forcarLogout() {
-    if (this.sock) {
-      try {
-        await this.sock.logout();
-      } catch {
-        // Ignorar
-      }
-    }
-    await this._limparSessao();
-    await this.desconectar();
-    logger.info('[WhatsApp] Logout forçado — sessão removida');
+    this.inicioConexao = null;
+    logger.info('[WhatsApp] Desconectado');
   }
 }
 
-// Singleton
 const conexaoWA = new WhatsAppConnection();
-
 module.exports = conexaoWA;

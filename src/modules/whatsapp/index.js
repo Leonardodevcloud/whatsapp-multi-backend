@@ -1,10 +1,9 @@
 // src/modules/whatsapp/index.js
-// Ponto de entrada do módulo WhatsApp
+// Ponto de entrada do módulo WhatsApp (Cloud API)
 
 const whatsappRoutes = require('./whatsapp.routes');
 const { initWhatsAppTables } = require('./whatsapp.migration');
 const conexaoWA = require('./whatsapp.connection');
-const { inicializarFilas, enfileirarMensagem } = require('./whatsapp.queue');
 const logger = require('../../shared/logger');
 
 function initWhatsAppRoutes(app) {
@@ -12,19 +11,9 @@ function initWhatsAppRoutes(app) {
 }
 
 /**
- * Inicializar conexão WhatsApp e wiring de eventos
- * Chamado após todas as migrations rodarem
+ * Inicializar conexão WhatsApp Cloud API
  */
 async function inicializarWhatsApp(wsBroadcast) {
-  // Inicializar filas BullMQ
-  inicializarFilas();
-
-  // QR code → broadcast via WebSocket para frontend
-  conexaoWA.on('qr', (qr) => {
-    wsBroadcast('whatsapp:qr', { qr });
-  });
-
-  // Conectado → broadcast
   conexaoWA.on('conectado', (info) => {
     wsBroadcast('whatsapp:conectado', {
       nome: info?.name,
@@ -33,43 +22,7 @@ async function inicializarWhatsApp(wsBroadcast) {
     logger.info('[WhatsApp] Evento conectado emitido via WS');
   });
 
-  // Desconectado → broadcast
-  conexaoWA.on('desconectado', (info) => {
-    wsBroadcast('whatsapp:desconectado', info);
-  });
-
-  // Atualização de status de mensagem (entregue, lida)
-  conexaoWA.on('messages.update', async (updates) => {
-    const { atualizarStatusEnvio } = require('../messages/messages.service');
-    for (const update of updates) {
-      try {
-        const waId = update.key?.id;
-        if (!waId) continue;
-
-        let novoStatus = null;
-        if (update.update?.status === 3) novoStatus = 'entregue';
-        if (update.update?.status === 4) novoStatus = 'lida';
-
-        if (novoStatus) {
-          await atualizarStatusEnvio({ waMessageId: waId, status: novoStatus });
-          wsBroadcast('mensagem:status', { waMessageId: waId, status: novoStatus });
-        }
-      } catch (err) {
-        logger.error({ err }, '[WhatsApp] Erro ao atualizar status de mensagem');
-      }
-    }
-  });
-
-  // Mensagem recebida → enfileirar na BullMQ
-  conexaoWA.on('mensagem.recebida', async (msg) => {
-    try {
-      await enfileirarMensagem(msg);
-    } catch (err) {
-      logger.error({ err, waId: msg.key?.id }, '[WhatsApp] Erro ao enfileirar mensagem');
-    }
-  });
-
-  // Iniciar conexão
+  // Conectar (verifica credenciais)
   await conexaoWA.conectar();
 }
 
