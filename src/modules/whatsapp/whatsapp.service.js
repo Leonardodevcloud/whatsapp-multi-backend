@@ -212,11 +212,12 @@ async function enviarAudio({ ticketId, audioBase64, usuarioId }) {
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.message || `HTTP ${response.status}`);
 
+    // Salvar base64 como media_url — o <audio> aceita data URI
     const msgResult = await query(
       `INSERT INTO mensagens (ticket_id, usuario_id, corpo, tipo, wa_message_id, is_from_me, status_envio, media_url)
        VALUES ($1, $2, '🎵 Áudio', 'audio', $3, TRUE, 'enviada', $4)
        RETURNING id, corpo, tipo, is_from_me, status_envio, criado_em, media_url`,
-      [ticketId, usuarioId, data.zapiMessageId || data.messageId || 'sent', audioBase64.substring(0, 500)]
+      [ticketId, usuarioId, data.zapiMessageId || data.messageId || 'sent', audioBase64]
     );
 
     await _atualizarPreviewTicket(ticketId, '🎵 Áudio');
@@ -242,11 +243,12 @@ async function enviarImagem({ ticketId, imagemBase64, caption, usuarioId }) {
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.message || `HTTP ${response.status}`);
 
+    // Salvar base64 como media_url — o <img> aceita data URI
     const msgResult = await query(
-      `INSERT INTO mensagens (ticket_id, usuario_id, corpo, tipo, wa_message_id, is_from_me, status_envio)
-       VALUES ($1, $2, $3, 'imagem', $4, TRUE, 'enviada')
-       RETURNING id, corpo, tipo, is_from_me, status_envio, criado_em`,
-      [ticketId, usuarioId, caption || '📷 Imagem', data.zapiMessageId || data.messageId || 'sent']
+      `INSERT INTO mensagens (ticket_id, usuario_id, corpo, tipo, wa_message_id, is_from_me, status_envio, media_url)
+       VALUES ($1, $2, $3, 'imagem', $4, TRUE, 'enviada', $5)
+       RETURNING id, corpo, tipo, is_from_me, status_envio, criado_em, media_url`,
+      [ticketId, usuarioId, caption || '📷 Imagem', data.zapiMessageId || data.messageId || 'sent', imagemBase64]
     );
 
     await _atualizarPreviewTicket(ticketId, caption || '📷 Imagem');
