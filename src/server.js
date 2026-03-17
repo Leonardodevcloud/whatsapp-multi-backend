@@ -252,9 +252,11 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 process.on('uncaughtException', (err) => {
-  logger.error({ err: err.message, stack: err.stack }, '[Server] Uncaught Exception');
-  // NUNCA crashar — Baileys gera uncaught exceptions durante reconexão
-  // O processo precisa sobreviver pra atender requests HTTP
+  console.error('[Server] UNCAUGHT EXCEPTION DETALHADO:', err);
+  console.error('[Server] Mensagem:', err?.message);
+  console.error('[Server] Stack:', err?.stack);
+  console.error('[Server] Nome:', err?.name);
+  console.error('[Server] Código:', err?.code);
   logger.warn('[Server] Processo mantido ativo apesar do erro');
 });
 
