@@ -101,28 +101,32 @@ router.post('/webhook', async (req, res) => {
 
     // ---- MENSAGEM (texto, mídia, localização, contato, sticker) ----
     if (body.phone) {
-      // Limpar telefone
-      let telefone = String(body.phone).replace('@c.us', '').replace('@s.whatsapp.net', '').replace('@g.us', '').replace(/\D/g, '');
+      // Limpar telefone — manter @lid e @g.us como identificadores
+      let telefoneRaw = String(body.phone);
+      let telefone = telefoneRaw.replace('@c.us', '').replace('@s.whatsapp.net', '').replace('@g.us', '').replace('@lid', '').replace(/\D/g, '');
       
       const isGroup = body.isGroup || false;
       const fromMe = body.fromMe || false;
 
-      // Para grupos: telefone é o ID do grupo, não descartar por tamanho
-      if (!isGroup && telefone.length > 15) {
-        logger.warn({ telefone, nome: body.senderName }, '[Webhook] Telefone parece ser ID interno — ignorando');
-        return;
-      }
+      // Para 1:1: se telefone é muito longo E não é grupo, pode ser lid — não descartar, usar como ID
+      // A Z-API manda @lid pra contatos vinculados — tratar normalmente
 
-      // Nome: em grupo, chatName é o nome do grupo. Em 1:1, é o nome do contato na agenda
+      // Nome do contato/grupo
       let nome;
       let nomeParticipante = null;
 
       if (isGroup) {
+        // Grupo: chatName é o nome do grupo
         nome = body.chatName || body.groupName || `Grupo ${telefone}`;
-        nomeParticipante = body.senderName || body.pushName || 'Participante';
+        // Participante: quem mandou a mensagem dentro do grupo
+        nomeParticipante = body.senderName || body.pushName || body.participantName || 'Participante';
       } else {
-        nome = body.chatName || body.senderName || body.pushName || telefone;
+        // 1:1: priorizar chatName (agenda), depois senderName, depois pushName
+        nome = body.chatName || body.senderName || body.pushName || body.name || telefone;
       }
+
+      // Log detalhado pra debug
+      logger.info({ telefone, isGroup, fromMe, nome, nomeParticipante, chatName: body.chatName, senderName: body.senderName }, '[Webhook] Dados extraídos');
 
       // messageId — Z-API manda em vários campos possíveis
       const waMessageId = body.messageId || body.id?.id || body.zapiMessageId || body.id?._serialized || body.ids?.[0]?.id;

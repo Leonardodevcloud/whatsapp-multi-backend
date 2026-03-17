@@ -30,6 +30,7 @@ async function listarMensagens({ ticketId, cursor, limite = 50 }) {
     `SELECT m.id, m.ticket_id, m.contato_id, m.usuario_id, m.corpo, m.tipo,
             m.media_url, m.media_tipo, m.media_nome, m.wa_message_id,
             m.is_from_me, m.is_internal, m.status_envio, m.quoted_message_id, m.criado_em,
+            m.nome_participante,
             c.nome as contato_nome,
             u.nome as usuario_nome, u.avatar_url as usuario_avatar,
             qm.corpo as quoted_corpo, qm.tipo as quoted_tipo

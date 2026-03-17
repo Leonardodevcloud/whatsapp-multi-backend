@@ -134,17 +134,13 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
     }
 
     // Salvar mensagem
-    // Em grupos, prefixar o corpo com o nome de quem mandou
     let corpoFinal = corpo || '';
-    if (isGroup && nomeParticipante && !fromMe) {
-      corpoFinal = corpo || '';
-    }
 
     const msgResult = await client.query(
-      `INSERT INTO mensagens (ticket_id, contato_id, corpo, tipo, wa_message_id, is_from_me, status_envio, media_url)
-       VALUES ($1, $2, $3, $4, $5, $6, 'entregue', $7)
-       RETURNING id, ticket_id, corpo, tipo, is_from_me, criado_em, media_url`,
-      [ticketId, fromMe ? null : contatoId, corpoFinal, tipo, waMessageId, fromMe || false, mediaUrl || null]
+      `INSERT INTO mensagens (ticket_id, contato_id, corpo, tipo, wa_message_id, is_from_me, status_envio, media_url, nome_participante)
+       VALUES ($1, $2, $3, $4, $5, $6, 'entregue', $7, $8)
+       RETURNING id, ticket_id, corpo, tipo, is_from_me, criado_em, media_url, nome_participante`,
+      [ticketId, fromMe ? null : contatoId, corpoFinal, tipo, waMessageId, fromMe || false, mediaUrl || null, (isGroup && nomeParticipante) ? nomeParticipante : null]
     );
 
     // Preview
