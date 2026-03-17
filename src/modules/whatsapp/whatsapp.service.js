@@ -10,8 +10,14 @@ const logger = require('../../shared/logger');
  * Enviar mensagem de texto via Z-API
  */
 async function enviarMensagemTexto({ ticketId, texto, usuarioId }) {
+  // Se tem credenciais configuradas, considerar conectado (webhook pode ter atualizado)
+  if (conexaoWA.status !== 'conectado' && conexaoWA.instanceId && conexaoWA.token) {
+    logger.warn('[WA] Status era desconectado mas tem credenciais — forçando como conectado');
+    conexaoWA.status = 'conectado';
+  }
+
   if (conexaoWA.status !== 'conectado') {
-    throw new AppError('WhatsApp não está conectado', 503);
+    throw new AppError('WhatsApp não está conectado. Configure ZAPI_INSTANCE_ID e ZAPI_TOKEN.', 503);
   }
 
   const resultado = await query(
@@ -22,23 +28,33 @@ async function enviarMensagemTexto({ ticketId, texto, usuarioId }) {
   if (resultado.rows.length === 0) throw new AppError('Ticket não encontrado', 404);
 
   const { telefone } = resultado.rows[0];
-  const sent = await conexaoWA.enviarTexto(telefone, texto);
 
-  const msgResult = await query(
-    `INSERT INTO mensagens (ticket_id, usuario_id, corpo, tipo, wa_message_id, is_from_me, status_envio)
-     VALUES ($1, $2, $3, 'texto', $4, TRUE, 'enviada')
-     RETURNING id, corpo, tipo, is_from_me, status_envio, criado_em`,
-    [ticketId, usuarioId, texto, sent.key.id]
-  );
+  logger.info({ ticketId, telefone, textoLen: texto.length }, '[WA] Tentando enviar mensagem');
 
-  await query(
-    `UPDATE tickets SET ultima_mensagem_em = NOW(), ultima_mensagem_preview = $1, atualizado_em = NOW() WHERE id = $2`,
-    [texto.substring(0, 200), ticketId]
-  );
+  try {
+    const sent = await conexaoWA.enviarTexto(telefone, texto);
 
-  await _calcularTempoRespostaSeNecessario(ticketId);
+    const msgResult = await query(
+      `INSERT INTO mensagens (ticket_id, usuario_id, corpo, tipo, wa_message_id, is_from_me, status_envio)
+       VALUES ($1, $2, $3, 'texto', $4, TRUE, 'enviada')
+       RETURNING id, corpo, tipo, is_from_me, status_envio, criado_em`,
+      [ticketId, usuarioId, texto, sent.key.id]
+    );
 
-  return msgResult.rows[0];
+    await query(
+      `UPDATE tickets SET ultima_mensagem_em = NOW(), ultima_mensagem_preview = $1, atualizado_em = NOW() WHERE id = $2`,
+      [texto.substring(0, 200), ticketId]
+    );
+
+    await _calcularTempoRespostaSeNecessario(ticketId);
+
+    logger.info({ ticketId, waMessageId: sent.key.id }, '[WA] Mensagem enviada com sucesso');
+
+    return msgResult.rows[0];
+  } catch (err) {
+    logger.error({ err: err.message, ticketId, telefone }, '[WA] ERRO AO ENVIAR MENSAGEM');
+    throw new AppError(`Falha ao enviar: ${err.message}`, 500);
+  }
 }
 
 async function _calcularTempoRespostaSeNecessario(ticketId) {
