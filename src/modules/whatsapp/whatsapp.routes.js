@@ -188,6 +188,24 @@ router.post('/webhook', async (req, res) => {
       const isGroup = body.isGroup || false;
       const fromMe = body.fromMe || false;
 
+      // DEBUG: Quando fromMe, logar campos pra encontrar telefone real
+      if (fromMe) {
+        logger.info({
+          phone: body.phone,
+          chatId: body.chatId,
+          chat: body.chat,
+          from: body.from,
+          to: body.to,
+          participant: body.participant,
+          senderPhone: body.senderPhone,
+          chatPhone: body.chatPhone,
+          momment: body.momment,
+          chatName: body.chatName,
+          senderName: body.senderName,
+          connectedPhone: body.connectedPhone,
+        }, '[Webhook] fromMe DEBUG — campos disponíveis');
+      }
+
       // Para 1:1: se telefone é muito longo E não é grupo, pode ser lid — não descartar, usar como ID
       // A Z-API manda @lid pra contatos vinculados — tratar normalmente
 
