@@ -1,5 +1,5 @@
 // src/modules/whatsapp/whatsapp.service.js
-// Serviço WhatsApp — Z-API
+// Serviço WhatsApp — Z-API (CORRIGIDO)
 
 const conexaoWA = require('./whatsapp.connection');
 const { query, getClient } = require('../../config/database');
@@ -10,9 +10,8 @@ const logger = require('../../shared/logger');
  * Enviar mensagem de texto via Z-API
  */
 async function enviarMensagemTexto({ ticketId, texto, usuarioId }) {
-  // Se tem credenciais configuradas, considerar conectado (webhook pode ter atualizado)
+  // Forçar conectado se tem credenciais
   if (conexaoWA.status !== 'conectado' && conexaoWA.instanceId && conexaoWA.token) {
-    logger.warn('[WA] Status era desconectado mas tem credenciais — forçando como conectado');
     conexaoWA.status = 'conectado';
   }
 
@@ -28,8 +27,6 @@ async function enviarMensagemTexto({ ticketId, texto, usuarioId }) {
   if (resultado.rows.length === 0) throw new AppError('Ticket não encontrado', 404);
 
   const { telefone } = resultado.rows[0];
-
-  logger.info({ ticketId, telefone, textoLen: texto.length }, '[WA] Tentando enviar mensagem');
 
   try {
     const sent = await conexaoWA.enviarTexto(telefone, texto);
@@ -48,11 +45,9 @@ async function enviarMensagemTexto({ ticketId, texto, usuarioId }) {
 
     await _calcularTempoRespostaSeNecessario(ticketId);
 
-    logger.info({ ticketId, waMessageId: sent.key.id }, '[WA] Mensagem enviada com sucesso');
-
     return msgResult.rows[0];
   } catch (err) {
-    logger.error({ err: err.message, ticketId, telefone }, '[WA] ERRO AO ENVIAR MENSAGEM');
+    logger.error({ err: err.message, ticketId, telefone }, '[WA] ERRO AO ENVIAR');
     throw new AppError(`Falha ao enviar: ${err.message}`, 500);
   }
 }
@@ -66,15 +61,15 @@ async function _calcularTempoRespostaSeNecessario(ticketId) {
     const diffSeg = Math.floor((Date.now() - new Date(ticket.rows[0].criado_em).getTime()) / 1000);
     await query(`UPDATE tickets SET tempo_primeira_resposta_seg = $1 WHERE id = $2`, [diffSeg, ticketId]);
   } catch (err) {
-    logger.error({ err, ticketId }, '[WA] Erro ao calcular TPR');
+    logger.error({ err, ticketId }, '[WA] Erro TPR');
   }
 }
 
 /**
  * Processar mensagem recebida do webhook Z-API
+ * Agora suporta: fromMe (mensagens enviadas pelo celular), mídia, todos os tipos
  */
-async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessageId, isGroup }) {
-  // Ignorar grupos
+async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessageId, isGroup, fromMe, mediaUrl }) {
   if (isGroup) return null;
 
   const client = await getClient();
@@ -89,10 +84,9 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
       return null;
     }
 
-    // Contato
-    // Z-API envia telefone no formato 5571999999999 ou 5571999999999@c.us
     const telefoneLimpo = telefone.replace('@c.us', '').replace(/\D/g, '');
 
+    // Contato — pra mensagens fromMe, o telefone é do destinatário
     let contatoResult = await client.query(`SELECT id, nome FROM contatos WHERE telefone = $1`, [telefoneLimpo]);
     let contatoId;
 
@@ -121,7 +115,7 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
 
     if (ticketResult.rows.length > 0) {
       ticketId = ticketResult.rows[0].id;
-      if (ticketResult.rows[0].status === 'resolvido') {
+      if (ticketResult.rows[0].status === 'resolvido' && !fromMe) {
         await client.query(`UPDATE tickets SET status = 'pendente', usuario_id = NULL, atualizado_em = NOW() WHERE id = $1`, [ticketId]);
       }
     } else {
@@ -137,12 +131,13 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
 
     // Salvar mensagem
     const msgResult = await client.query(
-      `INSERT INTO mensagens (ticket_id, contato_id, corpo, tipo, wa_message_id, is_from_me, status_envio)
-       VALUES ($1, $2, $3, $4, $5, FALSE, 'entregue')
-       RETURNING id, ticket_id, corpo, tipo, is_from_me, criado_em`,
-      [ticketId, contatoId, corpo || '', tipo || 'texto', waMessageId]
+      `INSERT INTO mensagens (ticket_id, contato_id, corpo, tipo, wa_message_id, is_from_me, status_envio, media_url)
+       VALUES ($1, $2, $3, $4, $5, $6, 'entregue', $7)
+       RETURNING id, ticket_id, corpo, tipo, is_from_me, criado_em, media_url`,
+      [ticketId, fromMe ? null : contatoId, corpo || '', tipo, waMessageId, fromMe || false, mediaUrl || null]
     );
 
+    // Preview
     await client.query(
       `UPDATE tickets SET ultima_mensagem_em = NOW(), ultima_mensagem_preview = $1, atualizado_em = NOW() WHERE id = $2`,
       [(corpo || '📎 Mídia').substring(0, 200), ticketId]
@@ -150,8 +145,10 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
 
     await client.query('COMMIT');
 
-    // Marcar como lida no Z-API
-    conexaoWA.marcarComoLida(waMessageId, telefoneLimpo);
+    // Marcar como lida
+    if (!fromMe) {
+      conexaoWA.marcarComoLida(waMessageId, telefoneLimpo);
+    }
 
     const mensagemCompleta = {
       ...msgResult.rows[0],
@@ -159,7 +156,7 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
       ticketNovo,
     };
 
-    logger.info({ ticketId, waMessageId, tipo }, '[WA] Mensagem processada');
+    logger.info({ ticketId, waMessageId, tipo, fromMe }, '[WA] Mensagem processada');
     return mensagemCompleta;
   } catch (err) {
     await client.query('ROLLBACK');
@@ -179,15 +176,8 @@ function _gerarProtocolo() {
 
 function obterQrCode() { return null; }
 function obterStatus() { return conexaoWA.obterStatus(); }
-
-async function reconectar() {
-  await conexaoWA.desconectar();
-  await conexaoWA.conectar();
-}
-
-async function forcarLogout() {
-  await conexaoWA.desconectar();
-}
+async function reconectar() { await conexaoWA.desconectar(); await conexaoWA.conectar(); }
+async function forcarLogout() { await conexaoWA.desconectar(); }
 
 module.exports = {
   enviarMensagemTexto,
