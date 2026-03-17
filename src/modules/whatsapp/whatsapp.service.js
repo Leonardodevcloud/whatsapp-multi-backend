@@ -102,10 +102,22 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
       return null;
     }
 
-    const telefoneLimpo = telefone.replace('@c.us', '').replace(/\D/g, '');
+    const telefoneLimpo = telefone.replace('@c.us', '').replace('@lid', '').replace('@s.whatsapp.net', '').replace(/\D/g, '');
 
-    // Contato — pra mensagens fromMe, o telefone é do destinatário
+    logger.info(`[WA] Buscando contato tel=${telefoneLimpo} (raw=${telefone}) fromMe=${fromMe}`);
+
+    // Contato — buscar por telefone exato ou parcial (últimos 8 dígitos)
     let contatoResult = await client.query(`SELECT id, nome, avatar_url FROM contatos WHERE telefone = $1`, [telefoneLimpo]);
+    
+    // Se não encontrou e telefone tem mais de 13 dígitos (pode ser @lid), buscar pelos últimos dígitos
+    if (contatoResult.rows.length === 0 && telefoneLimpo.length > 13) {
+      const ultimos = telefoneLimpo.slice(-11); // Últimos 11 dígitos (DDD + número)
+      contatoResult = await client.query(`SELECT id, nome, avatar_url FROM contatos WHERE telefone LIKE $1`, [`%${ultimos}`]);
+      if (contatoResult.rows.length > 0) {
+        logger.info(`[WA] Contato encontrado por match parcial: ${ultimos}`);
+      }
+    }
+
     let contatoId;
 
     if (contatoResult.rows.length === 0) {

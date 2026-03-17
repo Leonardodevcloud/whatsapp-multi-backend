@@ -206,7 +206,7 @@ router.post('/webhook', async (req, res) => {
       }
 
       // Log detalhado pra debug
-      logger.info({ telefone, isGroup, fromMe, nome, nomeParticipante, chatName: body.chatName, senderName: body.senderName }, '[Webhook] Dados extraídos');
+      logger.info(`[Webhook] tel=${telefone} fromMe=${fromMe} isGroup=${isGroup} nome=${nome}`);
 
       // messageId — Z-API manda em vários campos possíveis
       const waMessageId = body.messageId || body.id?.id || body.zapiMessageId || body.id?._serialized || body.ids?.[0]?.id;
