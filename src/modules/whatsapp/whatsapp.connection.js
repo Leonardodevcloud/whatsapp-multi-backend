@@ -6,6 +6,7 @@ const {
   DisconnectReason,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
+  initAuthCreds,
   isJidBroadcast,
   isJidStatusBroadcast,
 } = require('@whiskeysockets/baileys');
@@ -65,12 +66,12 @@ class WhatsAppConnection extends EventEmitter {
       await query(`DELETE FROM whatsapp_sessoes WHERE sessao_id = $1`, [`${SESSAO_ID}:${id}`]);
     };
 
-    // Carregar creds existentes
-    const creds = await readData('creds');
+    // Carregar creds existentes ou criar novas
+    const creds = await readData('creds') || initAuthCreds();
 
     return {
       state: {
-        creds: creds || undefined,
+        creds,
         keys: makeCacheableSignalKeyStore(
           {
             get: async (type, ids) => {
@@ -114,17 +115,9 @@ class WhatsAppConnection extends EventEmitter {
 
       const { state, saveCreds } = await this.usePostgresAuthState();
 
-      // Logger silencioso pra Baileys — evita uncaught exceptions
-      const baileysLogger = {
-        level: 'silent',
-        trace: () => {},
-        debug: () => {},
-        info: () => {},
-        warn: () => {},
-        error: () => {},
-        fatal: () => {},
-        child: () => baileysLogger,
-      };
+      // Logger pino com nível warn pro Baileys
+      const pino = require('pino');
+      const baileysLogger = pino({ level: 'warn' });
 
       this.sock = makeWASocket({
         version,
