@@ -324,15 +324,25 @@ async function enviarDocumento({ ticketId, documentoBase64, fileName, usuarioId 
  * Buscar foto de perfil via Z-API
  */
 async function buscarFotoPerfil(telefone) {
-  if (!conexaoWA.instanceId || !conexaoWA.token) return null;
+  if (!conexaoWA.instanceId || !conexaoWA.token || !telefone) return null;
+  // Pular telefones de grupo (muito longos)
+  if (telefone.length > 15) return null;
+  
   try {
-    const response = await fetch(`${conexaoWA.baseUrl}/profile-picture/${telefone}`, {
+    // Z-API: GET /profile-picture?phone=5571999999999
+    const response = await fetch(`${conexaoWA.baseUrl}/profile-picture?phone=${telefone}`, {
       headers: conexaoWA.headers,
     });
-    if (!response.ok) return null;
+    if (!response.ok) {
+      logger.warn({ status: response.status, telefone }, '[WA] Foto perfil não encontrada');
+      return null;
+    }
     const data = await response.json();
-    return data.link || data.profilePicThumbObj?.imgFull || data.profilePictureUrl || null;
-  } catch {
+    const url = data.link || data.imgUrl || data.profilePicThumbObj?.imgFull || data.profilePictureUrl || data.eurl || data.url || null;
+    logger.info({ telefone, temFoto: !!url }, '[WA] Foto perfil');
+    return url;
+  } catch (err) {
+    logger.error({ err: err.message, telefone }, '[WA] Erro ao buscar foto');
     return null;
   }
 }
