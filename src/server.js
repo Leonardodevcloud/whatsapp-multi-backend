@@ -64,8 +64,8 @@ app.use(cors({
 }));
 
 app.use(compression({ threshold: 1024 }));
-app.use(express.json({ limit: '5mb' }));
-app.use(express.urlencoded({ extended: true, limit: '5mb' }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(cookieParser());
 app.use(inputSanitizer);
 app.use(limiteGeral);

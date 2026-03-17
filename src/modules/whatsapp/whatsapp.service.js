@@ -187,21 +187,9 @@ function _gerarProtocolo() {
  * Enviar áudio base64 via Z-API
  */
 async function enviarAudio({ ticketId, audioBase64, usuarioId }) {
-  if (conexaoWA.status !== 'conectado' && conexaoWA.instanceId && conexaoWA.token) {
-    conexaoWA.status = 'conectado';
-  }
-  if (conexaoWA.status !== 'conectado') throw new AppError('WhatsApp não conectado', 503);
-
-  const resultado = await query(
-    `SELECT c.telefone FROM tickets t JOIN contatos c ON c.id = t.contato_id WHERE t.id = $1`,
-    [ticketId]
-  );
-  if (resultado.rows.length === 0) throw new AppError('Ticket não encontrado', 404);
-
-  const { telefone } = resultado.rows[0];
+  const telefone = await _obterTelefoneDoTicket(ticketId);
 
   try {
-    // Z-API aceita áudio base64 no endpoint send-audio
     const response = await fetch(`${conexaoWA.baseUrl}/send-audio`, {
       method: 'POST',
       headers: conexaoWA.headers,
@@ -211,22 +199,147 @@ async function enviarAudio({ ticketId, audioBase64, usuarioId }) {
     if (!response.ok) throw new Error(data.message || `HTTP ${response.status}`);
 
     const msgResult = await query(
-      `INSERT INTO mensagens (ticket_id, usuario_id, corpo, tipo, wa_message_id, is_from_me, status_envio)
-       VALUES ($1, $2, '🎵 Áudio', 'audio', $3, TRUE, 'enviada')
-       RETURNING id, corpo, tipo, is_from_me, status_envio, criado_em`,
-      [ticketId, usuarioId, data.zapiMessageId || data.messageId || 'sent']
+      `INSERT INTO mensagens (ticket_id, usuario_id, corpo, tipo, wa_message_id, is_from_me, status_envio, media_url)
+       VALUES ($1, $2, '🎵 Áudio', 'audio', $3, TRUE, 'enviada', $4)
+       RETURNING id, corpo, tipo, is_from_me, status_envio, criado_em, media_url`,
+      [ticketId, usuarioId, data.zapiMessageId || data.messageId || 'sent', audioBase64.substring(0, 500)]
     );
 
-    await query(
-      `UPDATE tickets SET ultima_mensagem_em = NOW(), ultima_mensagem_preview = '🎵 Áudio', atualizado_em = NOW() WHERE id = $1`,
-      [ticketId]
-    );
-
+    await _atualizarPreviewTicket(ticketId, '🎵 Áudio');
     return msgResult.rows[0];
   } catch (err) {
     logger.error({ err: err.message, ticketId }, '[WA] Erro ao enviar áudio');
     throw new AppError(`Falha ao enviar áudio: ${err.message}`, 500);
   }
+}
+
+/**
+ * Enviar imagem base64 via Z-API
+ */
+async function enviarImagem({ ticketId, imagemBase64, caption, usuarioId }) {
+  const telefone = await _obterTelefoneDoTicket(ticketId);
+
+  try {
+    const response = await fetch(`${conexaoWA.baseUrl}/send-image`, {
+      method: 'POST',
+      headers: conexaoWA.headers,
+      body: JSON.stringify({ phone: telefone, image: imagemBase64, caption: caption || '' }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.message || `HTTP ${response.status}`);
+
+    const msgResult = await query(
+      `INSERT INTO mensagens (ticket_id, usuario_id, corpo, tipo, wa_message_id, is_from_me, status_envio)
+       VALUES ($1, $2, $3, 'imagem', $4, TRUE, 'enviada')
+       RETURNING id, corpo, tipo, is_from_me, status_envio, criado_em`,
+      [ticketId, usuarioId, caption || '📷 Imagem', data.zapiMessageId || data.messageId || 'sent']
+    );
+
+    await _atualizarPreviewTicket(ticketId, caption || '📷 Imagem');
+    return msgResult.rows[0];
+  } catch (err) {
+    logger.error({ err: err.message, ticketId }, '[WA] Erro ao enviar imagem');
+    throw new AppError(`Falha ao enviar imagem: ${err.message}`, 500);
+  }
+}
+
+/**
+ * Enviar vídeo base64 via Z-API
+ */
+async function enviarVideo({ ticketId, videoBase64, caption, usuarioId }) {
+  const telefone = await _obterTelefoneDoTicket(ticketId);
+
+  try {
+    const response = await fetch(`${conexaoWA.baseUrl}/send-video`, {
+      method: 'POST',
+      headers: conexaoWA.headers,
+      body: JSON.stringify({ phone: telefone, video: videoBase64, caption: caption || '' }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.message || `HTTP ${response.status}`);
+
+    const msgResult = await query(
+      `INSERT INTO mensagens (ticket_id, usuario_id, corpo, tipo, wa_message_id, is_from_me, status_envio)
+       VALUES ($1, $2, $3, 'video', $4, TRUE, 'enviada')
+       RETURNING id, corpo, tipo, is_from_me, status_envio, criado_em`,
+      [ticketId, usuarioId, caption || '🎥 Vídeo', data.zapiMessageId || data.messageId || 'sent']
+    );
+
+    await _atualizarPreviewTicket(ticketId, caption || '🎥 Vídeo');
+    return msgResult.rows[0];
+  } catch (err) {
+    logger.error({ err: err.message, ticketId }, '[WA] Erro ao enviar vídeo');
+    throw new AppError(`Falha ao enviar vídeo: ${err.message}`, 500);
+  }
+}
+
+/**
+ * Enviar documento base64 via Z-API
+ */
+async function enviarDocumento({ ticketId, documentoBase64, fileName, usuarioId }) {
+  const telefone = await _obterTelefoneDoTicket(ticketId);
+  const ext = fileName?.split('.').pop() || 'pdf';
+
+  try {
+    const response = await fetch(`${conexaoWA.baseUrl}/send-document/${ext}`, {
+      method: 'POST',
+      headers: conexaoWA.headers,
+      body: JSON.stringify({ phone: telefone, document: documentoBase64, fileName: fileName || 'arquivo' }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.message || `HTTP ${response.status}`);
+
+    const msgResult = await query(
+      `INSERT INTO mensagens (ticket_id, usuario_id, corpo, tipo, wa_message_id, is_from_me, status_envio)
+       VALUES ($1, $2, $3, 'documento', $4, TRUE, 'enviada')
+       RETURNING id, corpo, tipo, is_from_me, status_envio, criado_em`,
+      [ticketId, usuarioId, fileName || '📄 Documento', data.zapiMessageId || data.messageId || 'sent']
+    );
+
+    await _atualizarPreviewTicket(ticketId, `📄 ${fileName || 'Documento'}`);
+    return msgResult.rows[0];
+  } catch (err) {
+    logger.error({ err: err.message, ticketId }, '[WA] Erro ao enviar documento');
+    throw new AppError(`Falha ao enviar documento: ${err.message}`, 500);
+  }
+}
+
+/**
+ * Buscar foto de perfil via Z-API
+ */
+async function buscarFotoPerfil(telefone) {
+  if (!conexaoWA.instanceId || !conexaoWA.token) return null;
+  try {
+    const response = await fetch(`${conexaoWA.baseUrl}/profile-picture/${telefone}`, {
+      headers: conexaoWA.headers,
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    return data.link || data.profilePicThumbObj?.imgFull || data.profilePictureUrl || null;
+  } catch {
+    return null;
+  }
+}
+
+// Helpers internos
+async function _obterTelefoneDoTicket(ticketId) {
+  if (conexaoWA.status !== 'conectado' && conexaoWA.instanceId && conexaoWA.token) {
+    conexaoWA.status = 'conectado';
+  }
+  if (conexaoWA.status !== 'conectado') throw new AppError('WhatsApp não conectado', 503);
+
+  const resultado = await query(
+    `SELECT c.telefone FROM tickets t JOIN contatos c ON c.id = t.contato_id WHERE t.id = $1`, [ticketId]
+  );
+  if (resultado.rows.length === 0) throw new AppError('Ticket não encontrado', 404);
+  return resultado.rows[0].telefone;
+}
+
+async function _atualizarPreviewTicket(ticketId, preview) {
+  await query(
+    `UPDATE tickets SET ultima_mensagem_em = NOW(), ultima_mensagem_preview = $1, atualizado_em = NOW() WHERE id = $2`,
+    [preview.substring(0, 200), ticketId]
+  );
 }
 
 function obterQrCode() { return null; }
@@ -237,6 +350,10 @@ async function forcarLogout() { await conexaoWA.desconectar(); }
 module.exports = {
   enviarMensagemTexto,
   enviarAudio,
+  enviarImagem,
+  enviarVideo,
+  enviarDocumento,
+  buscarFotoPerfil,
   processarMensagemRecebida,
   obterQrCode,
   obterStatus,

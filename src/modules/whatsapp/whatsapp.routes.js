@@ -43,14 +43,46 @@ router.post('/enviar', verificarToken, limiteSensivel, async (req, res, next) =>
 router.post('/enviar-audio', verificarToken, limiteSensivel, async (req, res, next) => {
   try {
     const { ticket_id, audio_base64 } = req.body;
-    if (!ticket_id || !audio_base64) {
-      return res.status(400).json({ erro: 'ticket_id e audio_base64 são obrigatórios' });
-    }
+    if (!ticket_id || !audio_base64) return res.status(400).json({ erro: 'ticket_id e audio_base64 são obrigatórios' });
     const mensagem = await whatsappService.enviarAudio({ ticketId: ticket_id, audioBase64: audio_base64, usuarioId: req.usuario.id });
     res.json({ sucesso: true, mensagem });
-  } catch (err) {
-    next(err);
-  }
+  } catch (err) { next(err); }
+});
+
+// POST /api/whatsapp/enviar-imagem
+router.post('/enviar-imagem', verificarToken, limiteSensivel, async (req, res, next) => {
+  try {
+    const { ticket_id, imagem_base64, caption } = req.body;
+    if (!ticket_id || !imagem_base64) return res.status(400).json({ erro: 'ticket_id e imagem_base64 são obrigatórios' });
+    const mensagem = await whatsappService.enviarImagem({ ticketId: ticket_id, imagemBase64: imagem_base64, caption, usuarioId: req.usuario.id });
+    res.json({ sucesso: true, mensagem });
+  } catch (err) { next(err); }
+});
+
+// POST /api/whatsapp/enviar-video
+router.post('/enviar-video', verificarToken, limiteSensivel, async (req, res, next) => {
+  try {
+    const { ticket_id, video_base64, caption } = req.body;
+    if (!ticket_id || !video_base64) return res.status(400).json({ erro: 'ticket_id e video_base64 são obrigatórios' });
+    const mensagem = await whatsappService.enviarVideo({ ticketId: ticket_id, videoBase64: video_base64, caption, usuarioId: req.usuario.id });
+    res.json({ sucesso: true, mensagem });
+  } catch (err) { next(err); }
+});
+
+// POST /api/whatsapp/enviar-documento
+router.post('/enviar-documento', verificarToken, limiteSensivel, async (req, res, next) => {
+  try {
+    const { ticket_id, documento_base64, file_name } = req.body;
+    if (!ticket_id || !documento_base64) return res.status(400).json({ erro: 'ticket_id e documento_base64 são obrigatórios' });
+    const mensagem = await whatsappService.enviarDocumento({ ticketId: ticket_id, documentoBase64: documento_base64, fileName: file_name, usuarioId: req.usuario.id });
+    res.json({ sucesso: true, mensagem });
+  } catch (err) { next(err); }
+});
+
+// GET /api/whatsapp/foto-perfil/:telefone
+router.get('/foto-perfil/:telefone', verificarToken, async (req, res) => {
+  const url = await whatsappService.buscarFotoPerfil(req.params.telefone);
+  res.json({ url });
 });
 
 // POST /api/whatsapp/reconectar
