@@ -76,21 +76,23 @@ Não invente informações que você não sabe. Se não souber, sugira que o ate
 /**
  * Buscar últimas N mensagens de um ticket para contexto
  */
-async function buscarContextoMensagens(ticketId, limite = 10) {
+async function buscarContextoMensagens(ticketId, limite = 15) {
   const resultado = await query(
-    `SELECT m.corpo, m.is_from_me, m.tipo, m.is_internal, m.criado_em,
+    `SELECT m.corpo, m.is_from_me, m.tipo, m.is_internal, m.criado_em, m.nome_participante,
             CASE WHEN m.is_from_me THEN u.nome ELSE c.nome END as remetente
      FROM mensagens m
      LEFT JOIN usuarios u ON u.id = m.usuario_id
      LEFT JOIN contatos c ON c.id = m.contato_id
-     WHERE m.ticket_id = $1 AND m.tipo IN ('texto', 'sistema') AND m.is_internal = FALSE
+     WHERE m.ticket_id = $1 AND m.is_internal = FALSE AND m.tipo != 'sistema'
      ORDER BY m.id DESC LIMIT $2`,
     [ticketId, limite]
   );
 
   return resultado.rows.reverse().map((m) => {
     const papel = m.is_from_me ? 'Atendente' : 'Cliente';
-    return `[${papel}${m.remetente ? ` (${m.remetente})` : ''}]: ${m.corpo}`;
+    const nome = m.nome_participante || m.remetente || '';
+    const conteudo = m.corpo || `[${m.tipo}]`;
+    return `[${papel}${nome ? ` (${nome})` : ''}]: ${conteudo}`;
   }).join('\n');
 }
 
@@ -98,20 +100,20 @@ async function buscarContextoMensagens(ticketId, limite = 10) {
  * Gerar sugestão de resposta para o atendente
  */
 async function gerarSugestao(ticketId) {
-  // Cache — evitar chamadas duplicadas (TTL 5min)
   const cacheKey = `ai:sugestao:${ticketId}`;
   const cached = await cacheGet(cacheKey);
-  if (cached) return cached;
+  if (cached && cached.sugestao) return cached; // Só usar cache se tem sugestão real
 
   const systemPrompt = await obterSystemPrompt();
-  const contexto = await buscarContextoMensagens(ticketId, 10);
+  const contexto = await buscarContextoMensagens(ticketId, 15);
 
-  if (!contexto) {
-    return { sugestao: '' };
+  if (!contexto || contexto.trim().length < 5) {
+    return { sugestao: 'Ainda não há mensagens suficientes para gerar uma sugestão.' };
   }
 
-  const userPrompt = `Com base na conversa abaixo, sugira UMA resposta curta e profissional que o atendente pode enviar ao cliente.
-Apenas a resposta, sem explicações ou prefixos.
+  const userPrompt = `Com base na conversa abaixo entre atendente e cliente, sugira UMA resposta curta, profissional e empática que o atendente pode enviar ao cliente.
+A resposta deve ser direta e pronta para enviar, sem explicações, prefixos ou aspas.
+Se a conversa não tiver contexto suficiente, sugira uma saudação apropriada.
 
 Conversa:
 ${contexto}
@@ -121,7 +123,9 @@ Sugestão de resposta:`;
   const sugestao = await chamarClaude({ systemPrompt, userPrompt, maxTokens: 300 });
   const resultado = { sugestao: sugestao.trim() };
 
-  await cacheSet(cacheKey, resultado, 300); // 5 min
+  if (resultado.sugestao) {
+    await cacheSet(cacheKey, resultado, 300);
+  }
   return resultado;
 }
 
