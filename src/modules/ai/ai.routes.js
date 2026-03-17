@@ -41,4 +41,14 @@ router.get('/sentimento/:ticketId', verificarToken, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// POST /api/ai/melhorar-texto — corrigir gramática e ortografia
+router.post('/melhorar-texto', verificarToken, limiteSensivel, async (req, res, next) => {
+  try {
+    const { texto } = req.body;
+    if (!texto?.trim()) return res.status(400).json({ erro: 'Texto é obrigatório' });
+    const resultado = await aiService.melhorarTexto(texto.trim());
+    res.json(resultado);
+  } catch (err) { next(err); }
+});
+
 module.exports = router;

@@ -1,14 +1,14 @@
 // src/modules/ai/ai.service.js
-// Serviço de IA — Claude API para sugestões, resumo, classificação e sentimento
+// Serviço de IA — Gemini API para sugestões, resumo, classificação e sentimento
 
 const { query } = require('../../config/database');
 const { cacheGet, cacheSet } = require('../../config/redis');
 const AppError = require('../../shared/AppError');
 const logger = require('../../shared/logger');
 
-const AI_API_URL = 'https://api.anthropic.com/v1/messages';
-const AI_MODEL = process.env.AI_MODEL || 'claude-haiku-4-5-20251001';
-const AI_API_KEY = process.env.AI_API_KEY;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
 const MAX_CHAMADAS_POR_MINUTO = 30;
 
 // Rate limiter simples em memória
@@ -16,11 +16,11 @@ let chamadasNoMinuto = 0;
 setInterval(() => { chamadasNoMinuto = 0; }, 60000);
 
 /**
- * Chamar Claude API
+ * Chamar Gemini API
  */
 async function chamarClaude({ systemPrompt, userPrompt, maxTokens = 500 }) {
-  if (!AI_API_KEY) {
-    throw new AppError('API Key de IA não configurada', 503);
+  if (!GEMINI_API_KEY) {
+    throw new AppError('GEMINI_API_KEY não configurada', 503);
   }
 
   if (chamadasNoMinuto >= MAX_CHAMADAS_POR_MINUTO) {
@@ -30,32 +30,28 @@ async function chamarClaude({ systemPrompt, userPrompt, maxTokens = 500 }) {
   chamadasNoMinuto++;
 
   try {
-    const response = await fetch(AI_API_URL, {
+    const response = await fetch(GEMINI_API_URL, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': AI_API_KEY,
-        'anthropic-version': '2023-06-01',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: AI_MODEL,
-        max_tokens: maxTokens,
-        system: systemPrompt,
-        messages: [{ role: 'user', content: userPrompt }],
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        contents: [{ parts: [{ text: userPrompt }] }],
+        generationConfig: { maxOutputTokens: maxTokens, temperature: 0.7 },
       }),
     });
 
     if (!response.ok) {
       const erro = await response.text();
-      logger.error({ status: response.status, erro }, '[AI] Erro na API Claude');
+      logger.error({ status: response.status, erro }, '[AI] Erro na API Gemini');
       throw new AppError('Falha na chamada à IA', 502);
     }
 
     const data = await response.json();
-    return data.content?.[0]?.text || '';
+    const texto = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    return texto.trim();
   } catch (err) {
     if (err instanceof AppError) throw err;
-    logger.error({ err }, '[AI] Erro ao chamar Claude');
+    logger.error({ err: err.message }, '[AI] Erro ao chamar Gemini');
     throw new AppError('Erro ao processar com IA', 500);
   }
 }
@@ -264,11 +260,34 @@ JSON:`;
  * Verificar se IA está ativa
  */
 async function iaEstaAtiva() {
+  if (!GEMINI_API_KEY) return false;
   try {
     const resultado = await query(`SELECT valor FROM configuracoes WHERE chave = 'ia_ativa'`);
-    return resultado.rows[0]?.valor === 'true';
+    if (resultado.rows.length === 0) return true; // Se não tem config, considerar ativa
+    return resultado.rows[0]?.valor !== 'false';
   } catch {
-    return false;
+    return true; // Se tabela não existe, considerar ativa
+  }
+}
+
+/**
+ * Melhorar texto — corrigir gramática, ortografia e clareza
+ */
+async function melhorarTexto(texto) {
+  try {
+    const resposta = await chamarClaude({
+      systemPrompt: `Você é um assistente de escrita em português brasileiro. 
+Corrija gramática, ortografia e melhore a clareza do texto enviado.
+Mantenha o tom informal/profissional adequado a uma conversa de atendimento via WhatsApp.
+Responda APENAS com o texto corrigido, sem explicações, sem aspas, sem prefixo.
+Se o texto já estiver correto, retorne ele sem alterações.`,
+      userPrompt: texto,
+      maxTokens: 500,
+    });
+    return { textoOriginal: texto, textoMelhorado: resposta };
+  } catch (err) {
+    logger.error({ err: err.message }, '[IA] Erro ao melhorar texto');
+    return { textoOriginal: texto, textoMelhorado: texto, erro: err.message };
   }
 }
 
@@ -277,5 +296,6 @@ module.exports = {
   gerarResumo,
   classificarFila,
   detectarSentimento,
+  melhorarTexto,
   iaEstaAtiva,
 };
