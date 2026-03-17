@@ -69,9 +69,7 @@ async function _calcularTempoRespostaSeNecessario(ticketId) {
  * Processar mensagem recebida do webhook Z-API
  * Agora suporta: fromMe (mensagens enviadas pelo celular), mídia, todos os tipos
  */
-async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessageId, isGroup, fromMe, mediaUrl }) {
-  if (isGroup) return null;
-
+async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessageId, isGroup, fromMe, mediaUrl, nomeParticipante }) {
   const client = await getClient();
 
   try {
@@ -131,11 +129,17 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
     }
 
     // Salvar mensagem
+    // Em grupos, prefixar o corpo com o nome de quem mandou
+    let corpoFinal = corpo || '';
+    if (isGroup && nomeParticipante && !fromMe) {
+      corpoFinal = corpo || '';
+    }
+
     const msgResult = await client.query(
       `INSERT INTO mensagens (ticket_id, contato_id, corpo, tipo, wa_message_id, is_from_me, status_envio, media_url)
        VALUES ($1, $2, $3, $4, $5, $6, 'entregue', $7)
        RETURNING id, ticket_id, corpo, tipo, is_from_me, criado_em, media_url`,
-      [ticketId, fromMe ? null : contatoId, corpo || '', tipo, waMessageId, fromMe || false, mediaUrl || null]
+      [ticketId, fromMe ? null : contatoId, corpoFinal, tipo, waMessageId, fromMe || false, mediaUrl || null]
     );
 
     // Preview
@@ -155,9 +159,11 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
       ...msgResult.rows[0],
       contato: { id: contatoId, nome: nome || telefoneLimpo, telefone: telefoneLimpo },
       ticketNovo,
+      isGroup,
+      nomeParticipante: isGroup ? nomeParticipante : null,
     };
 
-    logger.info({ ticketId, waMessageId, tipo, fromMe }, '[WA] Mensagem processada');
+    logger.info({ ticketId, waMessageId, tipo, fromMe, isGroup }, '[WA] Mensagem processada');
     return mensagemCompleta;
   } catch (err) {
     await client.query('ROLLBACK');

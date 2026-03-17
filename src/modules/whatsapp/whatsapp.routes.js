@@ -101,22 +101,30 @@ router.post('/webhook', async (req, res) => {
 
     // ---- MENSAGEM (texto, mídia, localização, contato, sticker) ----
     if (body.phone) {
-      // Limpar telefone — Z-API pode mandar com @c.us ou ID interno
-      let telefone = String(body.phone).replace('@c.us', '').replace('@s.whatsapp.net', '').replace(/\D/g, '');
+      // Limpar telefone
+      let telefone = String(body.phone).replace('@c.us', '').replace('@s.whatsapp.net', '').replace('@g.us', '').replace(/\D/g, '');
       
-      // Validar telefone — números brasileiros tem 12-13 dígitos (55 + DDD + 8-9 dígitos)
-      // Se o telefone tem mais de 15 dígitos, provavelmente é um ID interno — ignorar
-      if (telefone.length > 15) {
+      const isGroup = body.isGroup || false;
+      const fromMe = body.fromMe || false;
+
+      // Para grupos: telefone é o ID do grupo, não descartar por tamanho
+      if (!isGroup && telefone.length > 15) {
         logger.warn({ telefone, nome: body.senderName }, '[Webhook] Telefone parece ser ID interno — ignorando');
         return;
       }
 
-      // Nome: priorizar chatName (nome salvo na agenda do celular conectado)
-      // chatName = nome salvo na agenda | senderName = nome do perfil WhatsApp | pushName = nome público
-      const nome = body.chatName || body.senderName || body.pushName || telefone;
+      // Nome: em grupo, chatName é o nome do grupo. Em 1:1, é o nome do contato na agenda
+      let nome;
+      let nomeParticipante = null;
+
+      if (isGroup) {
+        nome = body.chatName || body.groupName || `Grupo ${telefone}`;
+        nomeParticipante = body.senderName || body.pushName || 'Participante';
+      } else {
+        nome = body.chatName || body.senderName || body.pushName || telefone;
+      }
+
       const waMessageId = body.messageId || body.id?.id || body.zapiMessageId;
-      const isGroup = body.isGroup || false;
-      const fromMe = body.fromMe || false;
 
       if (!waMessageId) {
         logger.warn({ bodyKeys: Object.keys(body) }, '[Webhook] Sem messageId');
@@ -182,6 +190,7 @@ router.post('/webhook', async (req, res) => {
         isGroup,
         fromMe,
         mediaUrl,
+        nomeParticipante,
       });
 
       if (resultado) {
