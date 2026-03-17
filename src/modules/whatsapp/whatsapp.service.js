@@ -104,8 +104,9 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
     }
 
     // Ticket
+    // Buscar ticket existente — qualquer status exceto 'fechado'
     let ticketResult = await client.query(
-      `SELECT id, status, usuario_id FROM tickets WHERE contato_id = $1 AND status NOT IN ('fechado') ORDER BY criado_em DESC LIMIT 1`,
+      `SELECT id, status, usuario_id FROM tickets WHERE contato_id = $1 AND status NOT IN ('fechado') ORDER BY id DESC LIMIT 1`,
       [contatoId]
     );
 
@@ -114,18 +115,22 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
 
     if (ticketResult.rows.length > 0) {
       ticketId = ticketResult.rows[0].id;
+      // Reabrir ticket resolvido quando cliente manda nova mensagem
       if (ticketResult.rows[0].status === 'resolvido' && !fromMe) {
         await client.query(`UPDATE tickets SET status = 'pendente', usuario_id = NULL, atualizado_em = NOW() WHERE id = $1`, [ticketId]);
       }
     } else {
+      // Só criar ticket novo se não tem NENHUM ticket aberto/pendente/aguardando/resolvido
       const protocolo = _gerarProtocolo();
+      // Para fromMe, criar como 'aberto' (não precisa aceitar)
+      const statusInicial = fromMe ? 'aberto' : 'pendente';
       const novo = await client.query(
-        `INSERT INTO tickets (contato_id, status, protocolo, ultima_mensagem_em) VALUES ($1, 'pendente', $2, NOW()) RETURNING id`,
-        [contatoId, protocolo]
+        `INSERT INTO tickets (contato_id, status, protocolo, ultima_mensagem_em) VALUES ($1, $2, $3, NOW()) RETURNING id`,
+        [contatoId, statusInicial, protocolo]
       );
       ticketId = novo.rows[0].id;
       ticketNovo = true;
-      logger.info({ ticketId, protocolo }, '[WA] Novo ticket');
+      logger.info({ ticketId, protocolo, fromMe }, '[WA] Novo ticket');
     }
 
     // Salvar mensagem
@@ -167,7 +172,8 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
     return mensagemCompleta;
   } catch (err) {
     await client.query('ROLLBACK');
-    logger.error({ err: err.message, waMessageId }, '[WA] Erro ao processar');
+    console.error('[WA] ERRO DETALHADO:', err);
+    logger.error({ erro: err.message, stack: err.stack, waMessageId, telefone, isGroup }, '[WA] Erro ao processar');
     throw err;
   } finally {
     client.release();

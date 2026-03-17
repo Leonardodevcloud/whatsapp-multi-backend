@@ -124,11 +124,17 @@ router.post('/webhook', async (req, res) => {
         nome = body.chatName || body.senderName || body.pushName || telefone;
       }
 
-      const waMessageId = body.messageId || body.id?.id || body.zapiMessageId;
+      // messageId — Z-API manda em vários campos possíveis
+      const waMessageId = body.messageId || body.id?.id || body.zapiMessageId || body.id?._serialized || body.ids?.[0]?.id;
 
       if (!waMessageId) {
-        logger.warn({ bodyKeys: Object.keys(body) }, '[Webhook] Sem messageId');
-        return;
+        // Gerar um ID único baseado no timestamp pra não perder a mensagem
+        const fallbackId = `zapi_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        logger.warn({ bodyKeys: Object.keys(body), phone: telefone, isGroup, text: typeof body.text }, '[Webhook] Sem messageId — usando fallback');
+        // Usar fallback ID pra não descartar a mensagem
+        var waMessageIdFinal = fallbackId;
+      } else {
+        var waMessageIdFinal = waMessageId;
       }
 
       // Detectar tipo e corpo da mensagem
@@ -176,7 +182,7 @@ router.post('/webhook', async (req, res) => {
 
       // Se não conseguiu extrair nada, logar e ignorar
       if (!corpo && !mediaUrl) {
-        logger.warn({ bodyKeys: Object.keys(body), waMessageId }, '[Webhook] Mensagem sem corpo detectável');
+        logger.warn({ bodyKeys: Object.keys(body), waMessageId: waMessageIdFinal, isGroup }, '[Webhook] Mensagem sem corpo detectável');
         return;
       }
 
@@ -186,7 +192,7 @@ router.post('/webhook', async (req, res) => {
         nome,
         corpo,
         tipo,
-        waMessageId,
+        waMessageId: waMessageIdFinal,
         isGroup,
         fromMe,
         mediaUrl,
