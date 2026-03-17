@@ -104,46 +104,81 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
 
     const telefoneLimpo = telefone.replace('@c.us', '').replace('@lid', '').replace('@s.whatsapp.net', '').replace(/\D/g, '');
 
-    logger.info(`[WA] Buscando contato tel=${telefoneLimpo} (raw=${telefone}) fromMe=${fromMe}`);
+    // Detectar se é LID (telefone com mais de 13 dígitos e não é grupo)
+    const isLid = telefoneLimpo.length > 13 && !isGroup;
 
-    // Contato — buscar por telefone exato ou parcial (últimos 8 dígitos)
-    let contatoResult = await client.query(`SELECT id, nome, avatar_url FROM contatos WHERE telefone = $1`, [telefoneLimpo]);
-    
-    // Se não encontrou e telefone tem mais de 13 dígitos (pode ser @lid), buscar pelos últimos dígitos
-    if (contatoResult.rows.length === 0 && telefoneLimpo.length > 13) {
-      const ultimos = telefoneLimpo.slice(-11); // Últimos 11 dígitos (DDD + número)
-      contatoResult = await client.query(`SELECT id, nome, avatar_url FROM contatos WHERE telefone LIKE $1`, [`%${ultimos}`]);
+    logger.info(`[WA] Buscando contato tel=${telefoneLimpo} (raw=${telefone}) fromMe=${fromMe} isLid=${isLid}`);
+
+    let contatoResult;
+
+    if (isLid) {
+      // Buscar por LID primeiro
+      contatoResult = await client.query(`SELECT id, nome, telefone, avatar_url FROM contatos WHERE lid = $1`, [telefoneLimpo]);
       if (contatoResult.rows.length > 0) {
-        logger.info(`[WA] Contato encontrado por match parcial: ${ultimos}`);
+        logger.info(`[WA] Contato encontrado por LID: ${telefoneLimpo} → tel=${contatoResult.rows[0].telefone}`);
+      }
+    }
+
+    if (!contatoResult || contatoResult.rows.length === 0) {
+      // Buscar por telefone exato
+      contatoResult = await client.query(`SELECT id, nome, telefone, avatar_url FROM contatos WHERE telefone = $1`, [telefoneLimpo]);
+    }
+
+    // Se é fromMe com LID e não encontrou, buscar pelo nome (chatName) pra mapear
+    if (contatoResult.rows.length === 0 && isLid && fromMe && nome && nome !== telefoneLimpo) {
+      // Buscar contato recente com mesmo nome que não tenha LID ainda
+      contatoResult = await client.query(
+        `SELECT id, nome, telefone, avatar_url FROM contatos WHERE nome = $1 AND lid IS NULL ORDER BY id DESC LIMIT 1`,
+        [nome]
+      );
+      if (contatoResult.rows.length > 0) {
+        // Mapear o LID a este contato
+        await client.query(`UPDATE contatos SET lid = $1 WHERE id = $2`, [telefoneLimpo, contatoResult.rows[0].id]);
+        logger.info(`[WA] LID mapeado: ${telefoneLimpo} → contato ${contatoResult.rows[0].telefone} (${nome})`);
       }
     }
 
     let contatoId;
 
     if (contatoResult.rows.length === 0) {
-      // Buscar foto de perfil (async, não bloqueia)
+      // Criar novo contato
       let avatarUrl = null;
       try {
         avatarUrl = await buscarFotoPerfil(telefoneLimpo);
       } catch { /* não crítico */ }
 
+      // Se é LID, salvar o LID no campo lid e usar o LID como telefone temporário
+      const lidValue = isLid ? telefoneLimpo : null;
+      const telParaSalvar = telefoneLimpo;
+
       const novo = await client.query(
-        `INSERT INTO contatos (nome, telefone, avatar_url) VALUES ($1, $2, $3) RETURNING id`,
-        [nome || telefoneLimpo, telefoneLimpo, avatarUrl]
+        `INSERT INTO contatos (nome, telefone, avatar_url, lid) VALUES ($1, $2, $3, $4) RETURNING id`,
+        [nome || telefoneLimpo, telParaSalvar, avatarUrl, lidValue]
       );
       contatoId = novo.rows[0].id;
-      logger.info({ contatoId, telefone: telefoneLimpo, nome, temAvatar: !!avatarUrl }, '[WA] Novo contato');
+      logger.info({ contatoId, telefone: telParaSalvar, nome, lid: lidValue, temAvatar: !!avatarUrl }, '[WA] Novo contato');
     } else {
       contatoId = contatoResult.rows[0].id;
+      
+      // Se NÃO é LID e contato não tem LID mapeado ainda, e veio fromMe=false (número real)
+      // Não precisa mapear aqui — o LID será mapeado quando fromMe=true
+
+      // Atualizar nome se mudou
       if (nome && nome !== telefoneLimpo && nome !== contatoResult.rows[0].nome) {
-        await client.query(`UPDATE contatos SET nome = $1, atualizado_em = NOW() WHERE id = $2`, [nome, contatoId]);
+        await client.query(`UPDATE contatos SET nome = $1 WHERE id = $2`, [nome, contatoId]);
       }
-      // Buscar foto se não tem ainda
+
+      // Se veio com número real (não LID) e o contato está salvo com LID como telefone, atualizar
+      if (!isLid && contatoResult.rows[0].telefone !== telefoneLimpo && contatoResult.rows[0].telefone?.length > 13) {
+        await client.query(`UPDATE contatos SET telefone = $1, lid = $2 WHERE id = $3`, [telefoneLimpo, contatoResult.rows[0].telefone, contatoId]);
+        logger.info(`[WA] Telefone atualizado: LID ${contatoResult.rows[0].telefone} → real ${telefoneLimpo}`);
+      }
+
+      // Buscar foto se não tem
       if (!contatoResult.rows[0].avatar_url) {
-        // Fazer async sem bloquear o processamento
         buscarFotoPerfil(telefoneLimpo).then(url => {
           if (url) {
-            query(`UPDATE contatos SET avatar_url = $1, atualizado_em = NOW() WHERE id = $2`, [url, contatoId]).catch(() => {});
+            query(`UPDATE contatos SET avatar_url = $1 WHERE id = $2`, [url, contatoId]).catch(() => {});
           }
         }).catch(() => {});
       }
