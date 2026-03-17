@@ -85,21 +85,35 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
     const telefoneLimpo = telefone.replace('@c.us', '').replace(/\D/g, '');
 
     // Contato — pra mensagens fromMe, o telefone é do destinatário
-    let contatoResult = await client.query(`SELECT id, nome FROM contatos WHERE telefone = $1`, [telefoneLimpo]);
+    let contatoResult = await client.query(`SELECT id, nome, avatar_url FROM contatos WHERE telefone = $1`, [telefoneLimpo]);
     let contatoId;
 
     if (contatoResult.rows.length === 0) {
+      // Buscar foto de perfil (async, não bloqueia)
+      let avatarUrl = null;
+      try {
+        avatarUrl = await buscarFotoPerfil(telefoneLimpo);
+      } catch { /* não crítico */ }
+
       const novo = await client.query(
-        `INSERT INTO contatos (nome, telefone) VALUES ($1, $2) RETURNING id`,
-        [nome || telefoneLimpo, telefoneLimpo]
+        `INSERT INTO contatos (nome, telefone, avatar_url) VALUES ($1, $2, $3) RETURNING id`,
+        [nome || telefoneLimpo, telefoneLimpo, avatarUrl]
       );
       contatoId = novo.rows[0].id;
-      logger.info({ contatoId, telefone: telefoneLimpo, nome }, '[WA] Novo contato');
+      logger.info({ contatoId, telefone: telefoneLimpo, nome, temAvatar: !!avatarUrl }, '[WA] Novo contato');
     } else {
       contatoId = contatoResult.rows[0].id;
-      // Atualizar nome se veio um nome diferente (chatName da agenda)
       if (nome && nome !== telefoneLimpo && nome !== contatoResult.rows[0].nome) {
         await client.query(`UPDATE contatos SET nome = $1, atualizado_em = NOW() WHERE id = $2`, [nome, contatoId]);
+      }
+      // Buscar foto se não tem ainda
+      if (!contatoResult.rows[0].avatar_url) {
+        // Fazer async sem bloquear o processamento
+        buscarFotoPerfil(telefoneLimpo).then(url => {
+          if (url) {
+            query(`UPDATE contatos SET avatar_url = $1, atualizado_em = NOW() WHERE id = $2`, [url, contatoId]).catch(() => {});
+          }
+        }).catch(() => {});
       }
     }
 

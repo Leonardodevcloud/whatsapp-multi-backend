@@ -85,6 +85,27 @@ router.get('/foto-perfil/:telefone', verificarToken, async (req, res) => {
   res.json({ url });
 });
 
+// POST /api/whatsapp/atualizar-fotos — busca foto de perfil de todos os contatos sem avatar
+router.post('/atualizar-fotos', verificarToken, verificarAdmin, async (req, res) => {
+  const { query: dbQuery } = require('../../config/database');
+  const contatos = await dbQuery(`SELECT id, telefone FROM contatos WHERE avatar_url IS NULL AND LENGTH(telefone) <= 15 LIMIT 50`);
+  let atualizados = 0;
+
+  for (const contato of contatos.rows) {
+    try {
+      const url = await whatsappService.buscarFotoPerfil(contato.telefone);
+      if (url) {
+        await dbQuery(`UPDATE contatos SET avatar_url = $1, atualizado_em = NOW() WHERE id = $2`, [url, contato.id]);
+        atualizados++;
+      }
+      // Rate limit — esperar 500ms entre cada requisição
+      await new Promise(r => setTimeout(r, 500));
+    } catch { /* ignorar */ }
+  }
+
+  res.json({ sucesso: true, total: contatos.rows.length, atualizados });
+});
+
 // POST /api/whatsapp/reconectar
 router.post('/reconectar', verificarToken, verificarAdmin, async (req, res, next) => {
   try {
