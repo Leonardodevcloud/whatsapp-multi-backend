@@ -96,10 +96,11 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
         [nome || telefoneLimpo, telefoneLimpo]
       );
       contatoId = novo.rows[0].id;
-      logger.info({ contatoId, telefone: telefoneLimpo }, '[WA] Novo contato');
+      logger.info({ contatoId, telefone: telefoneLimpo, nome }, '[WA] Novo contato');
     } else {
       contatoId = contatoResult.rows[0].id;
-      if (nome && (!contatoResult.rows[0].nome || contatoResult.rows[0].nome === telefoneLimpo)) {
+      // Atualizar nome se veio um nome diferente (chatName da agenda)
+      if (nome && nome !== telefoneLimpo && nome !== contatoResult.rows[0].nome) {
         await client.query(`UPDATE contatos SET nome = $1, atualizado_em = NOW() WHERE id = $2`, [nome, contatoId]);
       }
     }

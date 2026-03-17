@@ -111,7 +111,9 @@ router.post('/webhook', async (req, res) => {
         return;
       }
 
-      const nome = body.senderName || body.chatName || body.pushName || telefone;
+      // Nome: priorizar chatName (nome salvo na agenda do celular conectado)
+      // chatName = nome salvo na agenda | senderName = nome do perfil WhatsApp | pushName = nome público
+      const nome = body.chatName || body.senderName || body.pushName || telefone;
       const waMessageId = body.messageId || body.id?.id || body.zapiMessageId;
       const isGroup = body.isGroup || false;
       const fromMe = body.fromMe || false;
