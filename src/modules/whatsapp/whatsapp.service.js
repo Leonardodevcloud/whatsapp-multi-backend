@@ -114,11 +114,14 @@ function obterStatus() {
 }
 
 /**
- * Reconectar WhatsApp
+ * Reconectar WhatsApp — limpa sessão anterior pra gerar QR novo
  */
 async function reconectar() {
   await conexaoWA.desconectar();
+  // Limpar sessão corrompida pra forçar QR novo
+  await query(`DELETE FROM whatsapp_sessoes`);
   conexaoWA.tentativasReconexao = 0;
+  conexaoWA.qrCode = null;
   await conexaoWA.conectar();
 }
 

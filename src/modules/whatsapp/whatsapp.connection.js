@@ -109,6 +109,23 @@ class WhatsAppConnection extends EventEmitter {
    * Iniciar conexão WhatsApp
    */
   async conectar() {
+    // SEMPRE destruir socket anterior antes de criar novo
+    if (this.sock) {
+      try {
+        this.sock.ev.removeAllListeners();
+        await this.sock.end();
+      } catch {
+        // Ignorar
+      }
+      this.sock = null;
+    }
+
+    // Cancelar reconexão pendente
+    if (this.timerReconexao) {
+      clearTimeout(this.timerReconexao);
+      this.timerReconexao = null;
+    }
+
     try {
       const { version } = await fetchLatestBaileysVersion();
       logger.info({ version }, '[WhatsApp] Versão Baileys');
@@ -128,6 +145,7 @@ class WhatsAppConnection extends EventEmitter {
         generateHighQualityLinkPreview: false,
         syncFullHistory: false,
         markOnlineOnConnect: true,
+        qrTimeout: 60000, // 60 segundos pra escanear antes de gerar novo
         getMessage: async () => undefined,
       });
 
@@ -163,10 +181,13 @@ class WhatsAppConnection extends EventEmitter {
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
-      this.qrCode = qr;
-      this.status = 'escaneando_qr';
-      this.emit('qr', qr);
-      logger.info('[WhatsApp] Novo QR code gerado');
+      // Só emitir se o QR realmente mudou
+      if (this.qrCode !== qr) {
+        this.qrCode = qr;
+        this.status = 'escaneando_qr';
+        this.emit('qr', qr);
+        logger.info('[WhatsApp] Novo QR code gerado');
+      }
     }
 
     if (connection === 'close') {
