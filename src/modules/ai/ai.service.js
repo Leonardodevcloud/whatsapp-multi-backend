@@ -417,6 +417,69 @@ async function transcreverAudio(mensagemId) {
   }
 }
 
+/**
+ * Transcrever áudio a partir de base64 enviado pelo frontend
+ * O frontend baixa o áudio e manda base64 — resolve problema de rede bloqueada no Railway
+ */
+async function transcreverAudioBase64(mensagemId, audioDataUri) {
+  if (!GEMINI_API_KEY) throw new AppError('GEMINI_API_KEY não configurada', 503);
+
+  // Verificar se já tem transcrição
+  const msg = await query(`SELECT id, corpo, tipo FROM mensagens WHERE id = $1`, [mensagemId]);
+  if (msg.rows.length === 0) throw new AppError('Mensagem não encontrada', 404);
+
+  const corpoAtual = msg.rows[0].corpo;
+  if (corpoAtual && corpoAtual.length > 20 && !corpoAtual.startsWith('🎵')) {
+    return { transcricao: corpoAtual, fonte: 'cache' };
+  }
+
+  try {
+    // Extrair base64 e mimeType do data URI
+    let mimeType = 'audio/ogg';
+    let base64Data = audioDataUri;
+
+    const match = audioDataUri.match(/^data:([^;]+);base64,(.+)$/);
+    if (match) {
+      mimeType = match[1];
+      base64Data = match[2];
+    }
+
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
+
+    const geminiResponse = await fetch(geminiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          parts: [
+            { inline_data: { mime_type: mimeType, data: base64Data } },
+            { text: 'Transcreva este áudio em português brasileiro. Retorne APENAS o texto transcrito, sem aspas, prefixos ou explicações. Se não conseguir entender, retorne "[Áudio inaudível]".' }
+          ]
+        }],
+        generationConfig: { maxOutputTokens: 1000, temperature: 0.1 },
+      }),
+    });
+
+    if (!geminiResponse.ok) {
+      const erro = await geminiResponse.text();
+      logger.error({ status: geminiResponse.status, erro: erro.substring(0, 300) }, '[AI] Gemini rejeitou áudio base64');
+      throw new Error('Falha na transcrição pelo Gemini');
+    }
+
+    const data = await geminiResponse.json();
+    const transcricao = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '[Transcrição indisponível]';
+
+    // Salvar no banco
+    await query(`UPDATE mensagens SET corpo = $1, atualizado_em = NOW() WHERE id = $2`, [transcricao, mensagemId]);
+
+    logger.info({ mensagemId, len: transcricao.length }, '[AI] Áudio transcrito via base64');
+    return { transcricao, fonte: 'gemini' };
+  } catch (err) {
+    logger.error({ err: err.message, mensagemId }, '[AI] Erro transcrição base64');
+    throw new AppError(err.message || 'Falha na transcrição', 500);
+  }
+}
+
 module.exports = {
   gerarSugestao,
   gerarResumo,
@@ -424,5 +487,6 @@ module.exports = {
   detectarSentimento,
   melhorarTexto,
   transcreverAudio,
+  transcreverAudioBase64,
   iaEstaAtiva,
 };

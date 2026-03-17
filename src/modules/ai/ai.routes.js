@@ -59,4 +59,14 @@ router.post('/transcrever-audio/:mensagemId', verificarToken, limiteSensivel, as
   } catch (err) { next(err); }
 });
 
+// POST /api/ai/transcrever-audio-base64 — transcrever áudio enviado como base64 pelo frontend
+router.post('/transcrever-audio-base64', verificarToken, limiteSensivel, async (req, res, next) => {
+  try {
+    const { mensagem_id, audio_base64 } = req.body;
+    if (!mensagem_id || !audio_base64) return res.status(400).json({ erro: 'mensagem_id e audio_base64 são obrigatórios' });
+    const resultado = await aiService.transcreverAudioBase64(mensagem_id, audio_base64);
+    res.json(resultado);
+  } catch (err) { next(err); }
+});
+
 module.exports = router;
