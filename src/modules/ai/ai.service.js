@@ -462,8 +462,9 @@ async function transcreverAudioBase64(mensagemId, audioDataUri) {
 
     if (!geminiResponse.ok) {
       const erro = await geminiResponse.text();
-      logger.error({ status: geminiResponse.status, erro: erro.substring(0, 300) }, '[AI] Gemini rejeitou áudio base64');
-      throw new Error('Falha na transcrição pelo Gemini');
+      console.error('[AI] GEMINI REJEITOU:', geminiResponse.status, erro);
+      logger.error({ status: geminiResponse.status, erro: erro.substring(0, 500) }, '[AI] Gemini rejeitou áudio base64');
+      throw new Error(`Gemini ${geminiResponse.status}: ${erro.substring(0, 200)}`);
     }
 
     const data = await geminiResponse.json();
@@ -475,6 +476,7 @@ async function transcreverAudioBase64(mensagemId, audioDataUri) {
     logger.info({ mensagemId, len: transcricao.length }, '[AI] Áudio transcrito via base64');
     return { transcricao, fonte: 'gemini' };
   } catch (err) {
+    console.error('[AI] ERRO COMPLETO TRANSCRICAO:', err);
     logger.error({ err: err.message, mensagemId }, '[AI] Erro transcrição base64');
     throw new AppError(err.message || 'Falha na transcrição', 500);
   }
