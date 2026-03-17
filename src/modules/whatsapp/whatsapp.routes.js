@@ -101,8 +101,17 @@ router.post('/webhook', async (req, res) => {
 
     // ---- MENSAGEM (texto, mídia, localização, contato, sticker) ----
     if (body.phone) {
-      const telefone = body.phone;
-      const nome = body.senderName || body.chatName || telefone;
+      // Limpar telefone — Z-API pode mandar com @c.us ou ID interno
+      let telefone = String(body.phone).replace('@c.us', '').replace('@s.whatsapp.net', '').replace(/\D/g, '');
+      
+      // Validar telefone — números brasileiros tem 12-13 dígitos (55 + DDD + 8-9 dígitos)
+      // Se o telefone tem mais de 15 dígitos, provavelmente é um ID interno — ignorar
+      if (telefone.length > 15) {
+        logger.warn({ telefone, nome: body.senderName }, '[Webhook] Telefone parece ser ID interno — ignorando');
+        return;
+      }
+
+      const nome = body.senderName || body.chatName || body.pushName || telefone;
       const waMessageId = body.messageId || body.id?.id || body.zapiMessageId;
       const isGroup = body.isGroup || false;
       const fromMe = body.fromMe || false;
