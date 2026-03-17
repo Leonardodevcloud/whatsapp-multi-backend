@@ -341,28 +341,23 @@ async function enviarDocumento({ ticketId, documentoBase64, fileName, usuarioId 
 }
 
 /**
- * Buscar foto de perfil via Z-API
+ * Buscar foto de perfil via Z-API (contatos e grupos)
  */
 async function buscarFotoPerfil(telefone) {
   if (!conexaoWA.instanceId || !conexaoWA.token || !telefone) return null;
-  // Pular telefones de grupo (muito longos)
-  if (telefone.length > 15) return null;
   
   try {
     // Z-API: GET /profile-picture?phone=5571999999999
+    // Para grupos, o telefone é o ID do grupo (ex: 120363421560154850)
     const response = await fetch(`${conexaoWA.baseUrl}/profile-picture?phone=${telefone}`, {
       headers: conexaoWA.headers,
     });
-    if (!response.ok) {
-      logger.warn({ status: response.status, telefone }, '[WA] Foto perfil não encontrada');
-      return null;
-    }
+    if (!response.ok) return null;
     const data = await response.json();
     const url = data.link || data.imgUrl || data.profilePicThumbObj?.imgFull || data.profilePictureUrl || data.eurl || data.url || null;
     logger.info({ telefone, temFoto: !!url }, '[WA] Foto perfil');
     return url;
-  } catch (err) {
-    logger.error({ err: err.message, telefone }, '[WA] Erro ao buscar foto');
+  } catch {
     return null;
   }
 }
