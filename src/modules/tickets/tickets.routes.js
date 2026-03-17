@@ -198,4 +198,36 @@ router.get('/busca-texto', verificarToken, async (req, res, next) => {
   }
 });
 
+// POST /api/tickets/:id/visualizar — registrar que atendente visualizou o chamado
+router.post('/:id/visualizar', verificarToken, async (req, res, next) => {
+  try {
+    const { query: dbQuery } = require('../../config/database');
+    const { registrarMensagemSistema } = require('../messages/messages.service');
+    const { broadcast } = require('../../websocket');
+
+    const ticketId = req.params.id;
+    const usuario = req.usuario;
+
+    // Verificar se já visualizou recentemente (evitar spam)
+    const jaVisualizou = await dbQuery(
+      `SELECT id FROM mensagens WHERE ticket_id = $1 AND tipo = 'sistema' AND corpo LIKE $2 AND criado_em > NOW() - INTERVAL '5 minutes'`,
+      [ticketId, `%${usuario.nome} visualizou%`]
+    );
+
+    if (jaVisualizou.rows.length === 0) {
+      const hora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+      const msg = await registrarMensagemSistema({
+        ticketId,
+        corpo: `${usuario.nome} visualizou o chamado às ${hora}`,
+        usuarioId: usuario.id,
+      });
+      broadcast('mensagem:nova', { ...msg, ticket_id: parseInt(ticketId) });
+    }
+
+    res.json({ sucesso: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
 module.exports = router;

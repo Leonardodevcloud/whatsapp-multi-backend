@@ -29,6 +29,26 @@ async function enviarMensagemTexto({ ticketId, texto, usuarioId }) {
   const { telefone } = resultado.rows[0];
 
   try {
+    // Auto-aceitar: se chamado é pendente, atribuir ao atendente que respondeu
+    const ticketCheck = await query(`SELECT status, usuario_id FROM tickets WHERE id = $1`, [ticketId]);
+    if (ticketCheck.rows[0]?.status === 'pendente') {
+      await query(
+        `UPDATE tickets SET status = 'aberto', usuario_id = $1, atualizado_em = NOW() WHERE id = $2`,
+        [usuarioId, ticketId]
+      );
+      // Registrar mensagem de sistema
+      const { registrarMensagemSistema } = require('../messages/messages.service');
+      const nomeResult = await query(`SELECT nome FROM usuarios WHERE id = $1`, [usuarioId]);
+      const nomeAtendente = nomeResult.rows[0]?.nome || 'Atendente';
+      const hora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+      await registrarMensagemSistema({
+        ticketId,
+        corpo: `${nomeAtendente} iniciou o atendimento às ${hora}`,
+        usuarioId,
+      });
+      logger.info({ ticketId, usuarioId }, '[WA] Chamado auto-aceito ao responder');
+    }
+
     const sent = await conexaoWA.enviarTexto(telefone, texto);
 
     const msgResult = await query(

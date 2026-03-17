@@ -232,12 +232,25 @@ async function transferirTicket({ ticketId, filaId, usuarioId, motivoTransferenc
     params.push(tId);
     await client.query(`UPDATE tickets SET ${updates.join(', ')} WHERE id = $${idx}`, params);
 
-    // Mensagem de sistema
+    // Mensagem de sistema com nome e hora
+    const adminResult = await client.query(`SELECT nome FROM usuarios WHERE id = $1`, [adminId]);
+    const adminNome = adminResult.rows[0]?.nome || 'Atendente';
+    const hora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    
+    let msgSistema = '';
+    if (usuarioId) {
+      const destinoResult = await client.query(`SELECT nome FROM usuarios WHERE id = $1`, [parseInt(usuarioId)]);
+      const destinoNome = destinoResult.rows[0]?.nome || 'outro atendente';
+      msgSistema = `${adminNome} transferiu o chamado para ${destinoNome} às ${hora}`;
+    } else if (filaId) {
+      msgSistema = `${adminNome} transferiu o chamado para a fila às ${hora}`;
+    }
     const motivo = motivoTransferencia ? ` — Motivo: ${motivoTransferencia}` : '';
+
     await client.query(
       `INSERT INTO mensagens (ticket_id, usuario_id, corpo, tipo, is_from_me, is_internal)
        VALUES ($1, $2, $3, 'sistema', TRUE, TRUE)`,
-      [tId, adminId, `Ticket transferido${motivo}`]
+      [tId, adminId, `${msgSistema}${motivo}`]
     );
 
     await client.query('COMMIT');
@@ -279,11 +292,15 @@ async function resolverTicket({ ticketId, usuarioId, ip }) {
     [tempoResolucao, tId]
   );
 
-  // Mensagem de sistema
+  // Mensagem de sistema com nome e hora
+  const nomeResult = await query(`SELECT nome FROM usuarios WHERE id = $1`, [usuarioId]);
+  const nomeAtendente = nomeResult.rows[0]?.nome || 'Atendente';
+  const hora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+
   await query(
     `INSERT INTO mensagens (ticket_id, usuario_id, corpo, tipo, is_from_me, is_internal)
-     VALUES ($1, $2, 'Ticket resolvido', 'sistema', TRUE, TRUE)`,
-    [tId, usuarioId]
+     VALUES ($1, $2, $3, 'sistema', TRUE, TRUE)`,
+    [tId, usuarioId, `${nomeAtendente} finalizou o chamado às ${hora}`]
   );
 
   await registrarAuditoria({

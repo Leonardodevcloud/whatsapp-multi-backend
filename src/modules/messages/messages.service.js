@@ -123,10 +123,25 @@ async function contarNaoLidas(usuarioId) {
   return resultado.rows;
 }
 
+/**
+ * Registrar mensagem de sistema (visualizou, transferiu, finalizou, iniciou)
+ * Não é enviada pro WhatsApp — só aparece no chat interno
+ */
+async function registrarMensagemSistema({ ticketId, corpo, usuarioId }) {
+  const resultado = await query(
+    `INSERT INTO mensagens (ticket_id, usuario_id, corpo, tipo, is_from_me, is_internal, status_envio)
+     VALUES ($1, $2, $3, 'sistema', TRUE, TRUE, 'entregue')
+     RETURNING id, ticket_id, corpo, tipo, is_from_me, is_internal, criado_em`,
+    [ticketId, usuarioId || null, corpo]
+  );
+  return resultado.rows[0];
+}
+
 module.exports = {
   listarMensagens,
   criarNotaInterna,
   atualizarStatusEnvio,
   marcarComoLidas,
   contarNaoLidas,
+  registrarMensagemSistema,
 };
