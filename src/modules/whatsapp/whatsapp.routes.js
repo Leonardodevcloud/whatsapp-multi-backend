@@ -39,6 +39,20 @@ router.post('/enviar', verificarToken, limiteSensivel, async (req, res, next) =>
   }
 });
 
+// POST /api/whatsapp/enviar-audio — enviar áudio base64
+router.post('/enviar-audio', verificarToken, limiteSensivel, async (req, res, next) => {
+  try {
+    const { ticket_id, audio_base64 } = req.body;
+    if (!ticket_id || !audio_base64) {
+      return res.status(400).json({ erro: 'ticket_id e audio_base64 são obrigatórios' });
+    }
+    const mensagem = await whatsappService.enviarAudio({ ticketId: ticket_id, audioBase64: audio_base64, usuarioId: req.usuario.id });
+    res.json({ sucesso: true, mensagem });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // POST /api/whatsapp/reconectar
 router.post('/reconectar', verificarToken, verificarAdmin, async (req, res, next) => {
   try {
@@ -79,6 +93,20 @@ router.post('/webhook', async (req, res) => {
         conexaoWA.status = 'desconectado';
         broadcast('whatsapp:desconectado', {});
         logger.warn('[Webhook] Z-API desconectada');
+      }
+      return;
+    }
+
+    // ---- PRESENÇA / DIGITANDO ----
+    if (body.type === 'presence' || body.presence || body.act === 'composing' || body.act === 'paused' || body.act === 'recording') {
+      const phone = body.phone || body.from || body.chatId;
+      const act = body.act || body.presence || body.type;
+      if (phone) {
+        const telefoneLimpo = String(phone).replace('@c.us', '').replace('@s.whatsapp.net', '').replace(/\D/g, '');
+        broadcast('contato:digitando', {
+          telefone: telefoneLimpo,
+          acao: act, // composing, paused, recording, available, unavailable
+        });
       }
       return;
     }

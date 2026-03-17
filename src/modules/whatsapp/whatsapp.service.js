@@ -183,6 +183,52 @@ function _gerarProtocolo() {
   return `${yyyymmdd}-${random}`;
 }
 
+/**
+ * Enviar áudio base64 via Z-API
+ */
+async function enviarAudio({ ticketId, audioBase64, usuarioId }) {
+  if (conexaoWA.status !== 'conectado' && conexaoWA.instanceId && conexaoWA.token) {
+    conexaoWA.status = 'conectado';
+  }
+  if (conexaoWA.status !== 'conectado') throw new AppError('WhatsApp não conectado', 503);
+
+  const resultado = await query(
+    `SELECT c.telefone FROM tickets t JOIN contatos c ON c.id = t.contato_id WHERE t.id = $1`,
+    [ticketId]
+  );
+  if (resultado.rows.length === 0) throw new AppError('Ticket não encontrado', 404);
+
+  const { telefone } = resultado.rows[0];
+
+  try {
+    // Z-API aceita áudio base64 no endpoint send-audio
+    const response = await fetch(`${conexaoWA.baseUrl}/send-audio`, {
+      method: 'POST',
+      headers: conexaoWA.headers,
+      body: JSON.stringify({ phone: telefone, audio: audioBase64 }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.message || `HTTP ${response.status}`);
+
+    const msgResult = await query(
+      `INSERT INTO mensagens (ticket_id, usuario_id, corpo, tipo, wa_message_id, is_from_me, status_envio)
+       VALUES ($1, $2, '🎵 Áudio', 'audio', $3, TRUE, 'enviada')
+       RETURNING id, corpo, tipo, is_from_me, status_envio, criado_em`,
+      [ticketId, usuarioId, data.zapiMessageId || data.messageId || 'sent']
+    );
+
+    await query(
+      `UPDATE tickets SET ultima_mensagem_em = NOW(), ultima_mensagem_preview = '🎵 Áudio', atualizado_em = NOW() WHERE id = $1`,
+      [ticketId]
+    );
+
+    return msgResult.rows[0];
+  } catch (err) {
+    logger.error({ err: err.message, ticketId }, '[WA] Erro ao enviar áudio');
+    throw new AppError(`Falha ao enviar áudio: ${err.message}`, 500);
+  }
+}
+
 function obterQrCode() { return null; }
 function obterStatus() { return conexaoWA.obterStatus(); }
 async function reconectar() { await conexaoWA.desconectar(); await conexaoWA.conectar(); }
@@ -190,6 +236,7 @@ async function forcarLogout() { await conexaoWA.desconectar(); }
 
 module.exports = {
   enviarMensagemTexto,
+  enviarAudio,
   processarMensagemRecebida,
   obterQrCode,
   obterStatus,
