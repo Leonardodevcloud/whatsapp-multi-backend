@@ -92,24 +92,29 @@ class WhatsAppConnection extends EventEmitter {
   async enviarTexto(telefone, texto) {
     this._verificarConectado();
 
+    const payload = {
+      phone: telefone,
+      message: texto,
+    };
+
+    logger.info({ url: `${this.baseUrl}/send-text`, payload }, '[WhatsApp] Enviando pra Z-API');
+
     const response = await fetch(`${this.baseUrl}/send-text`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        phone: telefone,
-        message: texto,
-      }),
+      body: JSON.stringify(payload),
     });
 
+    const responseBody = await response.json().catch(() => ({}));
+
     if (!response.ok) {
-      const erro = await response.json().catch(() => ({}));
-      throw new Error(erro.message || `Z-API erro HTTP ${response.status}`);
+      logger.error({ status: response.status, responseBody, payload }, '[WhatsApp] Z-API rejeitou envio');
+      throw new Error(responseBody.message || responseBody.error || `Z-API erro HTTP ${response.status}`);
     }
 
-    const data = await response.json();
-    logger.info({ telefone, zapiMessageId: data.zapiMessageId }, '[WhatsApp] Mensagem enviada');
+    logger.info({ telefone, responseBody }, '[WhatsApp] Mensagem enviada');
 
-    return { key: { id: data.zapiMessageId || data.messageId } };
+    return { key: { id: responseBody.zapiMessageId || responseBody.messageId || 'unknown' } };
   }
 
   /**
