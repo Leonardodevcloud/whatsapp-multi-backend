@@ -1,10 +1,10 @@
 // src/modules/whatsapp/whatsapp.connection.js
-// WhatsApp Cloud API (Meta) — sem Baileys, HTTP puro
+// Conexão WhatsApp via Z-API — HTTP REST puro
 
 const { EventEmitter } = require('events');
 const logger = require('../../shared/logger');
 
-const GRAPH_API = 'https://graph.facebook.com/v21.0';
+const ZAPI_BASE = 'https://api.z-api.io/instances';
 
 class WhatsAppConnection extends EventEmitter {
   constructor() {
@@ -12,146 +12,188 @@ class WhatsAppConnection extends EventEmitter {
     this.status = 'desconectado';
     this.inicioConexao = null;
     this.infoUsuario = null;
-    this.phoneNumberId = null;
-    this.accessToken = null;
-    this.webhookVerifyToken = null;
+    this.instanceId = null;
+    this.token = null;
+    this.securityToken = null;
+  }
+
+  get baseUrl() {
+    return `${ZAPI_BASE}/${this.instanceId}/token/${this.token}`;
   }
 
   /**
-   * Inicializar com credenciais da Meta
+   * Inicializar com credenciais Z-API
    */
   async conectar() {
-    this.phoneNumberId = process.env.WA_PHONE_NUMBER_ID;
-    this.accessToken = process.env.WA_ACCESS_TOKEN;
-    this.webhookVerifyToken = process.env.WA_WEBHOOK_VERIFY_TOKEN || 'centraltutts_webhook_2026';
+    this.instanceId = process.env.ZAPI_INSTANCE_ID;
+    this.token = process.env.ZAPI_TOKEN;
+    this.securityToken = process.env.ZAPI_SECURITY_TOKEN;
 
-    if (!this.phoneNumberId || !this.accessToken) {
-      logger.warn('[WhatsApp] WA_PHONE_NUMBER_ID ou WA_ACCESS_TOKEN não configurados — WhatsApp desativado');
+    if (!this.instanceId || !this.token) {
+      logger.warn('[WhatsApp] ZAPI_INSTANCE_ID ou ZAPI_TOKEN não configurados — WhatsApp desativado');
       this.status = 'desconectado';
       return;
     }
 
     try {
-      const response = await fetch(`${GRAPH_API}/${this.phoneNumberId}`, {
-        headers: { 'Authorization': `Bearer ${this.accessToken}` },
+      // Verificar status da instância
+      const response = await fetch(`${this.baseUrl}/status`, {
+        headers: { 'Content-Type': 'application/json' },
       });
 
       if (!response.ok) {
-        const erro = await response.text();
-        logger.error({ status: response.status, erro }, '[WhatsApp] Credenciais inválidas');
+        logger.error({ status: response.status }, '[WhatsApp] Erro ao verificar Z-API');
         this.status = 'desconectado';
         return;
       }
 
       const data = await response.json();
-      this.infoUsuario = {
-        name: data.verified_name || data.display_phone_number || 'WhatsApp Business',
-        id: data.display_phone_number || this.phoneNumberId,
-      };
-      this.status = 'conectado';
-      this.inicioConexao = new Date();
+      logger.info({ data }, '[WhatsApp] Status Z-API');
 
-      logger.info({ nome: this.infoUsuario.name, numero: this.infoUsuario.id }, '[WhatsApp] Cloud API conectada!');
-      this.emit('conectado', this.infoUsuario);
+      if (data.connected) {
+        this.status = 'conectado';
+        this.inicioConexao = new Date();
+        this.infoUsuario = {
+          name: data.smartPhoneConnected ? 'WhatsApp Conectado' : 'Z-API',
+          id: this.instanceId,
+        };
+
+        // Buscar info do número
+        try {
+          const phoneResp = await fetch(`${this.baseUrl}/phone`, {
+            headers: { 'Content-Type': 'application/json' },
+          });
+          if (phoneResp.ok) {
+            const phoneData = await phoneResp.json();
+            if (phoneData.phone) {
+              this.infoUsuario.id = phoneData.phone;
+              this.infoUsuario.name = phoneData.name || 'WhatsApp Conectado';
+            }
+          }
+        } catch {
+          // Não crítico
+        }
+
+        logger.info({ nome: this.infoUsuario.name, numero: this.infoUsuario.id }, '[WhatsApp] Z-API conectada!');
+        this.emit('conectado', this.infoUsuario);
+      } else {
+        this.status = 'desconectado';
+        logger.warn('[WhatsApp] Z-API instância não conectada — escaneie o QR no painel Z-API');
+      }
     } catch (err) {
-      logger.error({ err: err.message }, '[WhatsApp] Erro ao conectar Cloud API');
+      logger.error({ err: err.message }, '[WhatsApp] Erro ao conectar Z-API');
       this.status = 'desconectado';
     }
   }
 
   /**
-   * Enviar mensagem de texto
+   * Enviar mensagem de texto via Z-API
    */
   async enviarTexto(telefone, texto) {
     this._verificarConectado();
 
-    const data = await this._chamarAPI('messages', {
-      messaging_product: 'whatsapp',
-      to: telefone,
-      type: 'text',
-      text: { body: texto },
+    const response = await fetch(`${this.baseUrl}/send-text`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        phone: telefone,
+        message: texto,
+      }),
     });
 
-    const waMessageId = data.messages?.[0]?.id;
-    logger.info({ telefone, waMessageId }, '[WhatsApp] Mensagem enviada');
-    return { key: { id: waMessageId } };
+    if (!response.ok) {
+      const erro = await response.json().catch(() => ({}));
+      throw new Error(erro.message || `Z-API erro HTTP ${response.status}`);
+    }
+
+    const data = await response.json();
+    logger.info({ telefone, zapiMessageId: data.zapiMessageId }, '[WhatsApp] Mensagem enviada');
+
+    return { key: { id: data.zapiMessageId || data.messageId } };
   }
 
   /**
-   * Enviar mídia
+   * Enviar imagem via Z-API
    */
-  async enviarMidia(telefone, tipo, mediaUrl, opcoes = {}) {
+  async enviarImagem(telefone, imageUrl, caption) {
     this._verificarConectado();
 
-    const payload = { messaging_product: 'whatsapp', to: telefone };
+    const response = await fetch(`${this.baseUrl}/send-image`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        phone: telefone,
+        image: imageUrl,
+        caption: caption || '',
+      }),
+    });
 
-    switch (tipo) {
-      case 'imagem':
-        payload.type = 'image';
-        payload.image = { link: mediaUrl, ...(opcoes.caption && { caption: opcoes.caption }) };
-        break;
-      case 'audio':
-        payload.type = 'audio';
-        payload.audio = { link: mediaUrl };
-        break;
-      case 'video':
-        payload.type = 'video';
-        payload.video = { link: mediaUrl, ...(opcoes.caption && { caption: opcoes.caption }) };
-        break;
-      case 'documento':
-        payload.type = 'document';
-        payload.document = { link: mediaUrl, filename: opcoes.fileName || 'arquivo' };
-        break;
-      default:
-        throw new Error(`Tipo não suportado: ${tipo}`);
-    }
+    if (!response.ok) throw new Error(`Erro ao enviar imagem: HTTP ${response.status}`);
+    const data = await response.json();
+    return { key: { id: data.zapiMessageId || data.messageId } };
+  }
 
-    const data = await this._chamarAPI('messages', payload);
-    return { key: { id: data.messages?.[0]?.id } };
+  /**
+   * Enviar áudio via Z-API
+   */
+  async enviarAudio(telefone, audioUrl) {
+    this._verificarConectado();
+
+    const response = await fetch(`${this.baseUrl}/send-audio`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        phone: telefone,
+        audio: audioUrl,
+      }),
+    });
+
+    if (!response.ok) throw new Error(`Erro ao enviar áudio: HTTP ${response.status}`);
+    const data = await response.json();
+    return { key: { id: data.zapiMessageId || data.messageId } };
+  }
+
+  /**
+   * Enviar documento via Z-API
+   */
+  async enviarDocumento(telefone, documentUrl, fileName) {
+    this._verificarConectado();
+
+    const ext = fileName?.split('.').pop() || 'pdf';
+    const response = await fetch(`${this.baseUrl}/send-document/${ext}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        phone: telefone,
+        document: documentUrl,
+        fileName: fileName || 'arquivo',
+      }),
+    });
+
+    if (!response.ok) throw new Error(`Erro ao enviar documento: HTTP ${response.status}`);
+    const data = await response.json();
+    return { key: { id: data.zapiMessageId || data.messageId } };
   }
 
   /**
    * Marcar mensagem como lida
    */
-  async marcarComoLida(waMessageId) {
-    if (this.status !== 'conectado' || !waMessageId) return;
+  async marcarComoLida(messageId, phone) {
+    if (this.status !== 'conectado' || !messageId) return;
     try {
-      await this._chamarAPI('messages', {
-        messaging_product: 'whatsapp',
-        status: 'read',
-        message_id: waMessageId,
+      await fetch(`${this.baseUrl}/read-message`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messageId, phone }),
       });
     } catch {
       // Não crítico
     }
   }
 
-  /**
-   * Chamar Graph API
-   */
-  async _chamarAPI(endpoint, body) {
-    const response = await fetch(`${GRAPH_API}/${this.phoneNumberId}/${endpoint}`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${this.accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(body),
-    });
-
-    if (!response.ok) {
-      const erro = await response.json().catch(() => ({}));
-      const msg = erro.error?.message || `HTTP ${response.status}`;
-      logger.error({ erro: msg, endpoint }, '[WhatsApp] Erro na API');
-      throw new Error(msg);
-    }
-
-    return response.json();
-  }
-
   _verificarConectado() {
     if (this.status !== 'conectado') {
-      throw new Error('WhatsApp Cloud API não está conectada');
+      throw new Error('WhatsApp Z-API não está conectada');
     }
   }
 
@@ -159,19 +201,19 @@ class WhatsAppConnection extends EventEmitter {
     return {
       status: this.status,
       conectado: this.status === 'conectado',
-      tipo: 'cloud_api',
+      tipo: 'z-api',
       tempoOnline: this.inicioConexao
         ? Math.floor((Date.now() - this.inicioConexao.getTime()) / 1000)
         : 0,
       usuario: this.infoUsuario,
-      qrDisponivel: false,
+      qrDisponivel: false, // QR é pelo painel Z-API
     };
   }
 
   async desconectar() {
     this.status = 'desconectado';
     this.inicioConexao = null;
-    logger.info('[WhatsApp] Desconectado');
+    logger.info('[WhatsApp] Z-API desconectada');
   }
 }
 

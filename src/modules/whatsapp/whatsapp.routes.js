@@ -1,5 +1,5 @@
 // src/modules/whatsapp/whatsapp.routes.js
-// Rotas WhatsApp — Cloud API + Webhook
+// Rotas WhatsApp — Z-API + Webhook
 
 const { Router } = require('express');
 const whatsappService = require('./whatsapp.service');
@@ -16,9 +16,12 @@ router.get('/status', verificarToken, (req, res) => {
   res.json(whatsappService.obterStatus());
 });
 
-// GET /api/whatsapp/qr — Cloud API não usa QR
+// GET /api/whatsapp/qr — Z-API gerencia QR pelo painel próprio
 router.get('/qr', verificarToken, (req, res) => {
-  res.json({ qr: null, mensagem: 'Cloud API não usa QR Code. Configure WA_PHONE_NUMBER_ID e WA_ACCESS_TOKEN nas variáveis de ambiente.' });
+  res.json({
+    qr: null,
+    mensagem: 'Z-API gerencia o QR Code pelo painel em z-api.io. Acesse sua instância lá para escanear.',
+  });
 });
 
 // POST /api/whatsapp/enviar
@@ -60,143 +63,131 @@ router.post('/logout', verificarToken, verificarAdmin, async (req, res, next) =>
 });
 
 // ============================================================
-// WEBHOOK da Meta — recebe mensagens do WhatsApp
+// WEBHOOK Z-API — recebe mensagens e status
 // ============================================================
 
-// GET /api/whatsapp/webhook — verificação do webhook pela Meta
-router.get('/webhook', (req, res) => {
-  const mode = req.query['hub.mode'];
-  const token = req.query['hub.verify_token'];
-  const challenge = req.query['hub.challenge'];
-
-  const verifyToken = conexaoWA.webhookVerifyToken || process.env.WA_WEBHOOK_VERIFY_TOKEN || 'centraltutts_webhook_2026';
-
-  if (mode === 'subscribe' && token === verifyToken) {
-    logger.info('[Webhook] Verificação da Meta aceita');
-    return res.status(200).send(challenge);
-  }
-
-  logger.warn({ mode, token }, '[Webhook] Verificação falhou');
-  return res.status(403).json({ erro: 'Verificação falhou' });
-});
-
-// POST /api/whatsapp/webhook — recebe mensagens
+// POST /api/whatsapp/webhook — webhook principal da Z-API
 router.post('/webhook', async (req, res) => {
-  // Sempre responder 200 imediatamente (Meta exige)
+  // Responder 200 imediatamente
   res.status(200).json({ status: 'ok' });
 
   try {
     const body = req.body;
 
-    if (body.object !== 'whatsapp_business_account') return;
-
-    const entries = body.entry || [];
-
-    for (const entry of entries) {
-      const changes = entry.changes || [];
-
-      for (const change of changes) {
-        if (change.field !== 'messages') continue;
-
-        const value = change.value;
-        if (!value?.messages) continue;
-
-        const contatos = value.contacts || [];
-        const mensagens = value.messages || [];
-
-        for (const msg of mensagens) {
-          const telefone = msg.from;
-          const contatoInfo = contatos.find((c) => c.wa_id === telefone);
-          const nome = contatoInfo?.profile?.name || telefone;
-          const waMessageId = msg.id;
-          const timestamp = msg.timestamp;
-
-          // Mapear tipo
-          let tipo = 'texto';
-          let corpo = '';
-
-          switch (msg.type) {
-            case 'text':
-              tipo = 'texto';
-              corpo = msg.text?.body || '';
-              break;
-            case 'image':
-              tipo = 'imagem';
-              corpo = msg.image?.caption || '📷 Imagem';
-              break;
-            case 'audio':
-              tipo = 'audio';
-              corpo = '🎵 Áudio';
-              break;
-            case 'video':
-              tipo = 'video';
-              corpo = msg.video?.caption || '🎥 Vídeo';
-              break;
-            case 'document':
-              tipo = 'documento';
-              corpo = msg.document?.filename || '📄 Documento';
-              break;
-            case 'location':
-              tipo = 'localizacao';
-              corpo = `📍 Localização: ${msg.location?.latitude}, ${msg.location?.longitude}`;
-              break;
-            case 'contacts':
-              tipo = 'contato';
-              corpo = `👤 Contato: ${msg.contacts?.[0]?.name?.formatted_name || 'Contato'}`;
-              break;
-            case 'sticker':
-              tipo = 'sticker';
-              corpo = '🎭 Sticker';
-              break;
-            case 'reaction':
-              // Ignorar reações
-              continue;
-            default:
-              tipo = 'texto';
-              corpo = `[${msg.type}]`;
-          }
-
-          // Processar
-          const resultado = await whatsappService.processarMensagemRecebida({
-            telefone,
-            nome,
-            corpo,
-            tipo,
-            waMessageId,
-            timestamp,
-          });
-
-          if (resultado) {
-            // Broadcast via WebSocket pros atendentes
-            broadcast('mensagem:nova', resultado);
-
-            if (resultado.ticketNovo) {
-              broadcast('ticket:novo', {
-                id: resultado.ticket_id,
-                contato: resultado.contato,
-                status: 'pendente',
-                ultimaMensagemPreview: corpo.substring(0, 200),
-              });
-            }
-          }
-        }
-
-        // Status updates (entregue, lida)
-        const statuses = value.statuses || [];
-        for (const status of statuses) {
-          const { atualizarStatusEnvio } = require('../messages/messages.service');
-          let novoStatus = null;
-          if (status.status === 'delivered') novoStatus = 'entregue';
-          if (status.status === 'read') novoStatus = 'lida';
-          if (status.status === 'sent') novoStatus = 'enviada';
-
-          if (novoStatus) {
-            await atualizarStatusEnvio({ waMessageId: status.id, status: novoStatus });
-            broadcast('mensagem:status', { waMessageId: status.id, status: novoStatus });
-          }
-        }
+    // Validar security token se configurado
+    const securityToken = conexaoWA.securityToken || process.env.ZAPI_SECURITY_TOKEN;
+    if (securityToken) {
+      const headerToken = req.headers['x-security-token'] || req.headers['security-token'];
+      if (headerToken && headerToken !== securityToken) {
+        logger.warn('[Webhook] Security token inválido');
+        return;
       }
     }
+
+    // Ignorar se não tem dados relevantes
+    if (!body || body.isStatusReply) return;
+
+    // ---- MENSAGEM RECEBIDA ----
+    if (body.phone && body.text && !body.fromMe) {
+      const telefone = body.phone;
+      const nome = body.senderName || body.chatName || telefone;
+      const waMessageId = body.messageId || body.id?.id;
+      const isGroup = body.isGroup || false;
+
+      // Mapear tipo
+      let tipo = 'texto';
+      let corpo = '';
+
+      if (body.text?.message) {
+        tipo = 'texto';
+        corpo = body.text.message;
+      } else if (body.image) {
+        tipo = 'imagem';
+        corpo = body.image.caption || '📷 Imagem';
+      } else if (body.audio) {
+        tipo = 'audio';
+        corpo = '🎵 Áudio';
+      } else if (body.video) {
+        tipo = 'video';
+        corpo = body.video.caption || '🎥 Vídeo';
+      } else if (body.document) {
+        tipo = 'documento';
+        corpo = body.document.fileName || '📄 Documento';
+      } else if (body.location) {
+        tipo = 'localizacao';
+        corpo = `📍 ${body.location.latitude}, ${body.location.longitude}`;
+      } else if (body.contact) {
+        tipo = 'contato';
+        corpo = `👤 ${body.contact.displayName || 'Contato'}`;
+      } else if (body.sticker) {
+        tipo = 'sticker';
+        corpo = '🎭 Sticker';
+      } else if (typeof body.text === 'string') {
+        tipo = 'texto';
+        corpo = body.text;
+      }
+
+      if (!waMessageId) {
+        logger.warn({ body: JSON.stringify(body).substring(0, 200) }, '[Webhook] Mensagem sem ID');
+        return;
+      }
+
+      const resultado = await whatsappService.processarMensagemRecebida({
+        telefone,
+        nome,
+        corpo,
+        tipo,
+        waMessageId,
+        isGroup,
+      });
+
+      if (resultado) {
+        broadcast('mensagem:nova', resultado);
+
+        if (resultado.ticketNovo) {
+          broadcast('ticket:novo', {
+            id: resultado.ticket_id,
+            contato: resultado.contato,
+            status: 'pendente',
+            ultimaMensagemPreview: corpo.substring(0, 200),
+          });
+        }
+      }
+      return;
+    }
+
+    // ---- STATUS DE MENSAGEM (enviada, entregue, lida) ----
+    if (body.status && body.id?.id) {
+      const { atualizarStatusEnvio } = require('../messages/messages.service');
+      const statusMap = {
+        'SENT': 'enviada',
+        'RECEIVED': 'entregue',
+        'READ': 'lida',
+        'PLAYED': 'lida',
+      };
+      const novoStatus = statusMap[body.status];
+      if (novoStatus) {
+        await atualizarStatusEnvio({ waMessageId: body.id.id, status: novoStatus });
+        broadcast('mensagem:status', { waMessageId: body.id.id, status: novoStatus });
+      }
+      return;
+    }
+
+    // ---- CONEXÃO/DESCONEXÃO ----
+    if (body.connected !== undefined) {
+      if (body.connected) {
+        conexaoWA.status = 'conectado';
+        conexaoWA.inicioConexao = new Date();
+        logger.info('[Webhook] Z-API conectada via webhook');
+        broadcast('whatsapp:conectado', { nome: 'WhatsApp', numero: '' });
+      } else {
+        conexaoWA.status = 'desconectado';
+        logger.warn('[Webhook] Z-API desconectada via webhook');
+        broadcast('whatsapp:desconectado', {});
+      }
+      return;
+    }
+
   } catch (err) {
     logger.error({ err: err.message }, '[Webhook] Erro ao processar');
   }

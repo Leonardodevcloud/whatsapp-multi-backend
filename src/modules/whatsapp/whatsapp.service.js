@@ -1,35 +1,29 @@
 // src/modules/whatsapp/whatsapp.service.js
-// Serviço WhatsApp — Cloud API
+// Serviço WhatsApp — Z-API
 
 const conexaoWA = require('./whatsapp.connection');
-const { query } = require('../../config/database');
+const { query, getClient } = require('../../config/database');
 const AppError = require('../../shared/AppError');
 const logger = require('../../shared/logger');
 
 /**
- * Enviar mensagem de texto via WhatsApp Cloud API
+ * Enviar mensagem de texto via Z-API
  */
 async function enviarMensagemTexto({ ticketId, texto, usuarioId }) {
   if (conexaoWA.status !== 'conectado') {
     throw new AppError('WhatsApp não está conectado', 503);
   }
 
-  // Buscar contato do ticket
   const resultado = await query(
     `SELECT c.telefone FROM tickets t JOIN contatos c ON c.id = t.contato_id WHERE t.id = $1`,
     [ticketId]
   );
 
-  if (resultado.rows.length === 0) {
-    throw new AppError('Ticket não encontrado', 404);
-  }
+  if (resultado.rows.length === 0) throw new AppError('Ticket não encontrado', 404);
 
   const { telefone } = resultado.rows[0];
-
-  // Enviar via Cloud API
   const sent = await conexaoWA.enviarTexto(telefone, texto);
 
-  // Salvar mensagem no banco
   const msgResult = await query(
     `INSERT INTO mensagens (ticket_id, usuario_id, corpo, tipo, wa_message_id, is_from_me, status_envio)
      VALUES ($1, $2, $3, 'texto', $4, TRUE, 'enviada')
@@ -37,13 +31,11 @@ async function enviarMensagemTexto({ ticketId, texto, usuarioId }) {
     [ticketId, usuarioId, texto, sent.key.id]
   );
 
-  // Atualizar preview
   await query(
     `UPDATE tickets SET ultima_mensagem_em = NOW(), ultima_mensagem_preview = $1, atualizado_em = NOW() WHERE id = $2`,
     [texto.substring(0, 200), ticketId]
   );
 
-  // Calcular tempo de primeira resposta
   await _calcularTempoRespostaSeNecessario(ticketId);
 
   return msgResult.rows[0];
@@ -52,8 +44,7 @@ async function enviarMensagemTexto({ ticketId, texto, usuarioId }) {
 async function _calcularTempoRespostaSeNecessario(ticketId) {
   try {
     const ticket = await query(
-      `SELECT tempo_primeira_resposta_seg, criado_em FROM tickets WHERE id = $1`,
-      [ticketId]
+      `SELECT tempo_primeira_resposta_seg, criado_em FROM tickets WHERE id = $1`, [ticketId]
     );
     if (ticket.rows[0]?.tempo_primeira_resposta_seg !== null) return;
     const diffSeg = Math.floor((Date.now() - new Date(ticket.rows[0].criado_em).getTime()) / 1000);
@@ -64,10 +55,13 @@ async function _calcularTempoRespostaSeNecessario(ticketId) {
 }
 
 /**
- * Processar mensagem recebida via webhook
+ * Processar mensagem recebida do webhook Z-API
  */
-async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessageId, timestamp }) {
-  const client = await require('../../config/database').getClient();
+async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessageId, isGroup }) {
+  // Ignorar grupos
+  if (isGroup) return null;
+
+  const client = await getClient();
 
   try {
     await client.query('BEGIN');
@@ -80,19 +74,22 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
     }
 
     // Contato
-    let contatoResult = await client.query(`SELECT id, nome FROM contatos WHERE telefone = $1`, [telefone]);
+    // Z-API envia telefone no formato 5571999999999 ou 5571999999999@c.us
+    const telefoneLimpo = telefone.replace('@c.us', '').replace(/\D/g, '');
+
+    let contatoResult = await client.query(`SELECT id, nome FROM contatos WHERE telefone = $1`, [telefoneLimpo]);
     let contatoId;
 
     if (contatoResult.rows.length === 0) {
       const novo = await client.query(
         `INSERT INTO contatos (nome, telefone) VALUES ($1, $2) RETURNING id`,
-        [nome || telefone, telefone]
+        [nome || telefoneLimpo, telefoneLimpo]
       );
       contatoId = novo.rows[0].id;
-      logger.info({ contatoId, telefone }, '[WA] Novo contato criado');
+      logger.info({ contatoId, telefone: telefoneLimpo }, '[WA] Novo contato');
     } else {
       contatoId = contatoResult.rows[0].id;
-      if (nome && !contatoResult.rows[0].nome) {
+      if (nome && (!contatoResult.rows[0].nome || contatoResult.rows[0].nome === telefoneLimpo)) {
         await client.query(`UPDATE contatos SET nome = $1, atualizado_em = NOW() WHERE id = $2`, [nome, contatoId]);
       }
     }
@@ -119,7 +116,7 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
       );
       ticketId = novo.rows[0].id;
       ticketNovo = true;
-      logger.info({ ticketId, protocolo }, '[WA] Novo ticket criado');
+      logger.info({ ticketId, protocolo }, '[WA] Novo ticket');
     }
 
     // Salvar mensagem
@@ -130,7 +127,6 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
       [ticketId, contatoId, corpo || '', tipo || 'texto', waMessageId]
     );
 
-    // Atualizar preview
     await client.query(
       `UPDATE tickets SET ultima_mensagem_em = NOW(), ultima_mensagem_preview = $1, atualizado_em = NOW() WHERE id = $2`,
       [(corpo || '📎 Mídia').substring(0, 200), ticketId]
@@ -138,21 +134,20 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
 
     await client.query('COMMIT');
 
-    // Marcar como lida na Cloud API
-    conexaoWA.marcarComoLida(waMessageId);
+    // Marcar como lida no Z-API
+    conexaoWA.marcarComoLida(waMessageId, telefoneLimpo);
 
     const mensagemCompleta = {
       ...msgResult.rows[0],
-      contato: { id: contatoId, nome: nome || telefone, telefone },
+      contato: { id: contatoId, nome: nome || telefoneLimpo, telefone: telefoneLimpo },
       ticketNovo,
     };
 
-    logger.info({ ticketId, waMessageId, tipo }, '[WA] Mensagem recebida processada');
-
+    logger.info({ ticketId, waMessageId, tipo }, '[WA] Mensagem processada');
     return mensagemCompleta;
   } catch (err) {
     await client.query('ROLLBACK');
-    logger.error({ err: err.message, waMessageId }, '[WA] Erro ao processar mensagem');
+    logger.error({ err: err.message, waMessageId }, '[WA] Erro ao processar');
     throw err;
   } finally {
     client.release();
