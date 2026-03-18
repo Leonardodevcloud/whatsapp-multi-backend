@@ -272,6 +272,24 @@ router.post('/webhook', async (req, res) => {
       const isGroup = body.isGroup || false;
       const fromMe = body.fromMe || false;
 
+      // ---- MENSAGEM APAGADA COM PHONE (revoke pode vir junto com phone) ----
+      if (body.waitingMessage === true || body.isRevoked === true || body.type === 'revoked') {
+        const msgId = body.messageId || body.id?.id || body.referenceMessageId;
+        logger.info({ msgId, telefone, waitingMessage: body.waitingMessage, isRevoked: body.isRevoked, type: body.type }, '[Webhook] Mensagem apagada (dentro de phone)');
+        if (msgId) {
+          const { query: dbQuery } = require('../../config/database');
+          const result = await dbQuery(
+            `UPDATE mensagens SET deletada = TRUE, deletada_por = 'contato' WHERE wa_message_id = $1 AND deletada = FALSE RETURNING id`,
+            [msgId]
+          );
+          if (result.rows.length > 0) {
+            broadcast('mensagem:deletada', { mensagemId: result.rows[0].id });
+            logger.info({ msgId, dbId: result.rows[0].id }, '[Webhook] Mensagem marcada como apagada');
+          }
+        }
+        return;
+      }
+
       // DEBUG: Quando fromMe, logar campos pra encontrar telefone real
       if (fromMe) {
         logger.info({

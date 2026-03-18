@@ -565,10 +565,13 @@ async function encaminharMensagem(mensagemId, telefoneDestino) {
   const msg = await query(`SELECT wa_message_id, ticket_id FROM mensagens WHERE id = $1`, [mensagemId]);
   if (msg.rows.length === 0) throw new AppError('Mensagem não encontrada', 404);
 
-  const telLimpo = telefoneDestino.replace(/\D/g, '');
-  await conexaoWA.encaminharMensagem(msg.rows[0].wa_message_id, telLimpo);
+  // Preciso do telefone do chat de ORIGEM (onde a mensagem está)
+  const telefoneOrigem = await _obterTelefoneDoTicket(msg.rows[0].ticket_id);
+  const telDestino = telefoneDestino.replace(/\D/g, '');
+  
+  await conexaoWA.encaminharMensagem(msg.rows[0].wa_message_id, telefoneOrigem, telDestino);
 
-  logger.info({ mensagemId, telefoneDestino: telLimpo }, '[WA] Mensagem encaminhada');
+  logger.info({ mensagemId, telefoneOrigem, telefoneDestino: telDestino }, '[WA] Mensagem encaminhada');
   return { sucesso: true };
 }
 

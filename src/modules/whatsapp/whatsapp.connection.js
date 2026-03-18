@@ -200,17 +200,20 @@ class WhatsAppConnection extends EventEmitter {
   }
 
   /**
-   * Encaminhar mensagem
+   * Encaminhar mensagem — precisa do messageId, phone do chat original, e phoneTo destino
    */
-  async encaminharMensagem(messageId, phoneTo) {
+  async encaminharMensagem(messageId, phoneOrigem, phoneTo) {
     this._verificarConectado();
     const resp = await fetch(`${this.baseUrl}/forward-message`, {
       method: 'POST',
       headers: this.headers,
-      body: JSON.stringify({ messageId, phone: phoneTo }),
+      body: JSON.stringify({ messageId, phone: phoneOrigem, phoneTo }),
     });
     const data = await resp.json().catch(() => ({}));
-    if (!resp.ok) throw new Error(data.message || `HTTP ${resp.status}`);
+    if (!resp.ok) {
+      logger.error({ status: resp.status, data, messageId, phoneOrigem, phoneTo }, '[WA] Erro forward-message');
+      throw new Error(data.message || `HTTP ${resp.status}`);
+    }
     return data;
   }
 
