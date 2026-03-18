@@ -62,4 +62,36 @@ router.delete('/:id/tags/:tagId', verificarToken, async (req, res, next) => {
   }
 });
 
+// POST /api/contacts/importar — importar contatos em massa (admin)
+router.post('/importar', verificarToken, async (req, res, next) => {
+  try {
+    const { query: dbQuery } = require('../../config/database');
+    const { contatos } = req.body;
+    if (!Array.isArray(contatos) || contatos.length === 0) {
+      return res.status(400).json({ erro: 'Array de contatos é obrigatório' });
+    }
+
+    let inseridos = 0;
+    let duplicados = 0;
+
+    for (const c of contatos) {
+      const nome = (c.nome || '').trim().substring(0, 200);
+      const telefone = (c.telefone || '').trim().replace(/\D/g, '');
+      if (!telefone) continue;
+
+      try {
+        await dbQuery(
+          `INSERT INTO contatos (nome, telefone) VALUES ($1, $2) ON CONFLICT (telefone) DO NOTHING`,
+          [nome || telefone, telefone]
+        );
+        inseridos++;
+      } catch {
+        duplicados++;
+      }
+    }
+
+    res.json({ sucesso: true, inseridos, duplicados, total: contatos.length });
+  } catch (err) { next(err); }
+});
+
 module.exports = router;
