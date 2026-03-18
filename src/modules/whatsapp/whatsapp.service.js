@@ -203,15 +203,24 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
     } else {
       // Só criar ticket novo se não tem NENHUM ticket aberto/pendente/aguardando/resolvido
       const protocolo = _gerarProtocolo();
-      // Para fromMe, criar como 'aberto' (não precisa aceitar)
-      const statusInicial = fromMe ? 'aberto' : 'pendente';
+      
+      // Para fromMe (celular), criar como 'pendente' na fila "Dispositivo Externo"
+      // Para mensagens normais, criar como 'pendente' sem fila
+      let filaId = null;
+      if (fromMe) {
+        const filaResult = await client.query(`SELECT id FROM filas WHERE nome = 'Dispositivo Externo' AND ativo = TRUE LIMIT 1`);
+        if (filaResult.rows.length > 0) {
+          filaId = filaResult.rows[0].id;
+        }
+      }
+
       const novo = await client.query(
-        `INSERT INTO tickets (contato_id, status, protocolo, ultima_mensagem_em) VALUES ($1, $2, $3, NOW()) RETURNING id`,
-        [contatoId, statusInicial, protocolo]
+        `INSERT INTO tickets (contato_id, status, protocolo, fila_id, ultima_mensagem_em) VALUES ($1, 'pendente', $2, $3, NOW()) RETURNING id`,
+        [contatoId, protocolo, filaId]
       );
       ticketId = novo.rows[0].id;
       ticketNovo = true;
-      logger.info({ ticketId, protocolo, fromMe }, '[WA] Novo ticket');
+      logger.info({ ticketId, protocolo, fromMe, filaId }, '[WA] Novo ticket');
     }
 
     // Salvar mensagem
@@ -435,6 +444,83 @@ function obterStatus() { return conexaoWA.obterStatus(); }
 async function reconectar() { await conexaoWA.desconectar(); await conexaoWA.conectar(); }
 async function forcarLogout() { await conexaoWA.desconectar(); }
 
+/**
+ * Iniciar conversa com contato existente — envia mensagem + cria/reabre ticket
+ */
+async function iniciarConversa({ telefone, mensagem, contatoId, usuarioId }) {
+  const telefoneLimpo = telefone.replace(/\D/g, '');
+
+  // Enviar mensagem via Z-API
+  await conexaoWA.enviarTexto(telefoneLimpo, mensagem);
+
+  // Buscar ou criar ticket
+  const ticketExistente = await query(
+    `SELECT t.id, t.status, t.protocolo, c.nome as contato_nome, c.telefone as contato_telefone, c.avatar_url as contato_avatar
+     FROM tickets t
+     LEFT JOIN contatos c ON c.id = t.contato_id
+     WHERE t.contato_id = $1 AND t.status IN ('aberto', 'pendente', 'aguardando')
+     ORDER BY t.id DESC LIMIT 1`,
+    [contatoId]
+  );
+
+  let ticketId, protocolo;
+
+  if (ticketExistente.rows.length > 0) {
+    ticketId = ticketExistente.rows[0].id;
+    protocolo = ticketExistente.rows[0].protocolo;
+    // Atribuir ao atendente se não tem
+    await query(
+      `UPDATE tickets SET status = 'aberto', usuario_id = $1, atualizado_em = NOW() WHERE id = $2`,
+      [usuarioId, ticketId]
+    );
+  } else {
+    // Verificar se tem ticket resolvido pra reabrir
+    const resolvido = await query(
+      `SELECT id, protocolo FROM tickets WHERE contato_id = $1 AND status = 'resolvido' ORDER BY id DESC LIMIT 1`,
+      [contatoId]
+    );
+
+    if (resolvido.rows.length > 0) {
+      ticketId = resolvido.rows[0].id;
+      protocolo = resolvido.rows[0].protocolo;
+      await query(
+        `UPDATE tickets SET status = 'aberto', usuario_id = $1, atualizado_em = NOW() WHERE id = $2`,
+        [usuarioId, ticketId]
+      );
+    } else {
+      // Criar ticket novo
+      protocolo = _gerarProtocolo();
+      const novo = await query(
+        `INSERT INTO tickets (contato_id, status, protocolo, usuario_id, ultima_mensagem_em) VALUES ($1, 'aberto', $2, $3, NOW()) RETURNING id`,
+        [contatoId, protocolo, usuarioId]
+      );
+      ticketId = novo.rows[0].id;
+    }
+  }
+
+  // Salvar mensagem no banco
+  const waMessageId = `sistema_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  await query(
+    `INSERT INTO mensagens (ticket_id, contato_id, corpo, tipo, wa_message_id, is_from_me, status_envio)
+     VALUES ($1, $2, $3, 'texto', $4, TRUE, 'enviada')`,
+    [ticketId, contatoId, mensagem, waMessageId]
+  );
+
+  // Atualizar preview
+  await _atualizarPreviewTicket(ticketId, mensagem);
+
+  // Buscar dados completos do ticket pra retornar
+  const ticketCompleto = await query(
+    `SELECT t.*, c.nome as contato_nome, c.telefone as contato_telefone, c.avatar_url as contato_avatar
+     FROM tickets t LEFT JOIN contatos c ON c.id = t.contato_id WHERE t.id = $1`,
+    [ticketId]
+  );
+
+  logger.info({ ticketId, protocolo, telefone: telefoneLimpo, usuarioId }, '[WA] Conversa iniciada pelo sistema');
+
+  return { sucesso: true, ticket: ticketCompleto.rows[0] };
+}
+
 module.exports = {
   enviarMensagemTexto,
   enviarAudio,
@@ -443,6 +529,7 @@ module.exports = {
   enviarDocumento,
   buscarFotoPerfil,
   processarMensagemRecebida,
+  iniciarConversa,
   obterQrCode,
   obterStatus,
   reconectar,

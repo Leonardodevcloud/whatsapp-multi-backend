@@ -105,6 +105,23 @@ router.post('/atualizar-fotos', verificarToken, verificarAdmin, async (req, res)
   res.json({ sucesso: true, total: contatos.rows.length, atualizados });
 });
 
+// POST /api/whatsapp/iniciar-conversa — iniciar conversa com contato existente
+router.post('/iniciar-conversa', verificarToken, async (req, res, next) => {
+  try {
+    const { telefone, mensagem, contato_id } = req.body;
+    if (!telefone || !mensagem) return res.status(400).json({ erro: 'telefone e mensagem são obrigatórios' });
+
+    const resultado = await whatsappService.iniciarConversa({
+      telefone,
+      mensagem,
+      contatoId: contato_id,
+      usuarioId: req.usuario.id,
+    });
+
+    res.json(resultado);
+  } catch (err) { next(err); }
+});
+
 // POST /api/whatsapp/reconectar
 router.post('/reconectar', verificarToken, verificarAdmin, async (req, res, next) => {
   try {
