@@ -235,7 +235,7 @@ async function transferirTicket({ ticketId, filaId, usuarioId, motivoTransferenc
     // Mensagem de sistema com nome e hora
     const adminResult = await client.query(`SELECT nome FROM usuarios WHERE id = $1`, [adminId]);
     const adminNome = adminResult.rows[0]?.nome || 'Atendente';
-    const hora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    const hora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Bahia' });
     
     let msgSistema = '';
     if (usuarioId) {
@@ -295,7 +295,7 @@ async function resolverTicket({ ticketId, usuarioId, ip }) {
   // Mensagem de sistema com nome e hora
   const nomeResult = await query(`SELECT nome FROM usuarios WHERE id = $1`, [usuarioId]);
   const nomeAtendente = nomeResult.rows[0]?.nome || 'Atendente';
-  const hora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  const hora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Bahia' });
 
   await query(
     `INSERT INTO mensagens (ticket_id, usuario_id, corpo, tipo, is_from_me, is_internal)

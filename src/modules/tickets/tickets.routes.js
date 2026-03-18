@@ -215,7 +215,7 @@ router.post('/:id/visualizar', verificarToken, async (req, res, next) => {
     );
 
     if (jaVisualizou.rows.length === 0) {
-      const hora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+      const hora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Bahia' });
       const msg = await registrarMensagemSistema({
         ticketId,
         corpo: `${usuario.nome} visualizou o chamado às ${hora}`,
