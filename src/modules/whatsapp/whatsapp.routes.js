@@ -384,9 +384,20 @@ router.post('/webhook', async (req, res) => {
         corpo = body.buttonsResponseMessage.selectedButtonId || body.buttonsResponseMessage.selectedDisplayText || '';
       }
 
-      // Se não conseguiu extrair nada, logar e ignorar
+      // Se não conseguiu extrair nada, logar detalhes pra debug
       if (!corpo && !mediaUrl) {
-        logger.warn({ bodyKeys: Object.keys(body), waMessageId: waMessageIdFinal, isGroup }, '[Webhook] Mensagem sem corpo detectável');
+        logger.warn({
+          bodyKeys: Object.keys(body),
+          waMessageId: waMessageIdFinal,
+          isGroup,
+          waitingMessage: body.waitingMessage,
+          isRevoked: body.isRevoked,
+          isEdit: body.isEdit,
+          type: body.type,
+          isNotification: body.isNotification,
+          status: body.status,
+          fromMe: body.fromMe,
+        }, '[Webhook] Mensagem sem corpo detectável');
         return;
       }
 
