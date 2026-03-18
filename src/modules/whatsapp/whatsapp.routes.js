@@ -179,8 +179,8 @@ router.post('/webhook', async (req, res) => {
     const body = req.body;
     if (!body) return;
 
-    // Log completo pra debug (remover depois de estável)
-    logger.info({ tipo: body.type || body.status || 'desconhecido', phone: body.phone, fromMe: body.fromMe, hasText: !!body.text, hasImage: !!body.image, hasAudio: !!body.audio }, '[Webhook] Payload recebido');
+    // Log completo pra debug
+    logger.info({ tipo: body.type || body.status || 'desconhecido', phone: body.phone, fromMe: body.fromMe, hasText: !!body.text, hasImage: !!body.image, hasAudio: !!body.audio, isRevoked: body.isRevoked, isReaction: body.isReaction, isEdit: body.isEdit }, '[Webhook] Payload recebido');
 
     // ---- CONEXÃO/DESCONEXÃO ----
     if (body.connected !== undefined) {
@@ -205,7 +205,7 @@ router.post('/webhook', async (req, res) => {
         const telefoneLimpo = String(phone).replace('@c.us', '').replace('@s.whatsapp.net', '').replace(/\D/g, '');
         broadcast('contato:digitando', {
           telefone: telefoneLimpo,
-          acao: act, // composing, paused, recording, available, unavailable
+          acao: act,
         });
       }
       return;
@@ -229,29 +229,36 @@ router.post('/webhook', async (req, res) => {
 
     // ---- REAÇÃO RECEBIDA ----
     if (body.isReaction || body.type === 'reaction') {
-      const msgId = body.messageId || body.referenceMessageId || body.reactionMessage?.messageId;
-      const emoji = body.reaction || body.reactionMessage?.reaction || body.text;
+      const msgId = body.messageId || body.referenceMessageId || body.reactionMessage?.messageId || body.reactionBy?.messageId;
+      const emoji = body.reaction || body.reactionMessage?.reaction || body.reactionBy?.reaction || body.text;
       if (msgId && emoji) {
         const { query: dbQuery } = require('../../config/database');
-        await dbQuery(`UPDATE mensagens SET reacao = $1 WHERE wa_message_id = $2`, [emoji, msgId]);
-        broadcast('mensagem:reacao', { waMessageId: msgId, reacao: emoji });
-        logger.info({ msgId, emoji }, '[Webhook] Reação recebida');
+        const result = await dbQuery(`UPDATE mensagens SET reacao = $1 WHERE wa_message_id = $2 RETURNING id`, [emoji, msgId]);
+        if (result.rows.length > 0) {
+          broadcast('mensagem:reacao', { mensagemId: result.rows[0].id, reacao: emoji });
+          logger.info({ msgId, emoji, dbId: result.rows[0].id }, '[Webhook] Reação salva');
+        } else {
+          logger.warn({ msgId, emoji }, '[Webhook] Reação recebida mas mensagem não encontrada no banco');
+        }
       }
       return;
     }
 
     // ---- MENSAGEM APAGADA (REVOKED) ----
-    if (body.type === 'revoked' || body.isRevoked) {
-      const msgId = body.messageId || body.id?.id || body.referenceMessageId;
+    // Z-API pode mandar como: type=revoked, isRevoked=true, type=delete, ou waitingMessage=true
+    if (body.type === 'revoked' || body.isRevoked || body.type === 'delete' || body.waitingMessage) {
+      const msgId = body.messageId || body.id?.id || body.referenceMessageId || body.ids?.[0]?.id;
+      logger.info({ msgId, type: body.type, isRevoked: body.isRevoked, waitingMessage: body.waitingMessage, bodyKeys: Object.keys(body) }, '[Webhook] Evento de mensagem apagada');
       if (msgId) {
         const { query: dbQuery } = require('../../config/database');
-        // Marcar como apagada mas manter conteúdo original
-        await dbQuery(
-          `UPDATE mensagens SET deletada = TRUE, deletada_por = 'contato' WHERE wa_message_id = $1`,
+        const result = await dbQuery(
+          `UPDATE mensagens SET deletada = TRUE, deletada_por = 'contato' WHERE wa_message_id = $1 AND deletada = FALSE RETURNING id`,
           [msgId]
         );
-        broadcast('mensagem:deletada', { waMessageId: msgId });
-        logger.info({ msgId }, '[Webhook] Mensagem apagada pelo contato');
+        if (result.rows.length > 0) {
+          broadcast('mensagem:deletada', { mensagemId: result.rows[0].id });
+          logger.info({ msgId, dbId: result.rows[0].id }, '[Webhook] Mensagem marcada como apagada');
+        }
       }
       return;
     }
