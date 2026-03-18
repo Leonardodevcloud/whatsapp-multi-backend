@@ -521,6 +521,80 @@ async function iniciarConversa({ telefone, mensagem, contatoId, usuarioId }) {
   return { sucesso: true, ticket: ticketCompleto.rows[0] };
 }
 
+/**
+ * Reagir a mensagem
+ */
+async function reagirMensagem(mensagemId, emoji) {
+  const msg = await query(`SELECT wa_message_id, ticket_id FROM mensagens WHERE id = $1`, [mensagemId]);
+  if (msg.rows.length === 0) throw new AppError('Mensagem não encontrada', 404);
+
+  const waMessageId = msg.rows[0].wa_message_id;
+  const telefone = await _obterTelefoneDoTicket(msg.rows[0].ticket_id);
+
+  await conexaoWA.reagirMensagem(waMessageId, telefone, emoji);
+
+  // Salvar reação no banco
+  await query(`UPDATE mensagens SET reacao = $1 WHERE id = $2`, [emoji, mensagemId]);
+
+  logger.info({ mensagemId, emoji }, '[WA] Reação enviada');
+  return { sucesso: true };
+}
+
+/**
+ * Deletar mensagem
+ */
+async function deletarMensagem(mensagemId) {
+  const msg = await query(`SELECT wa_message_id, ticket_id, is_from_me FROM mensagens WHERE id = $1`, [mensagemId]);
+  if (msg.rows.length === 0) throw new AppError('Mensagem não encontrada', 404);
+  if (!msg.rows[0].is_from_me) throw new AppError('Só é possível deletar mensagens enviadas por você', 400);
+
+  const telefone = await _obterTelefoneDoTicket(msg.rows[0].ticket_id);
+  await conexaoWA.deletarMensagem(msg.rows[0].wa_message_id, telefone);
+
+  // Marcar como deletada no banco
+  await query(`UPDATE mensagens SET corpo = '🚫 Mensagem apagada', tipo = 'sistema', deletada = TRUE WHERE id = $1`, [mensagemId]);
+
+  logger.info({ mensagemId }, '[WA] Mensagem deletada');
+  return { sucesso: true };
+}
+
+/**
+ * Encaminhar mensagem para outro contato
+ */
+async function encaminharMensagem(mensagemId, telefoneDestino) {
+  const msg = await query(`SELECT wa_message_id, ticket_id FROM mensagens WHERE id = $1`, [mensagemId]);
+  if (msg.rows.length === 0) throw new AppError('Mensagem não encontrada', 404);
+
+  const telLimpo = telefoneDestino.replace(/\D/g, '');
+  await conexaoWA.encaminharMensagem(msg.rows[0].wa_message_id, telLimpo);
+
+  logger.info({ mensagemId, telefoneDestino: telLimpo }, '[WA] Mensagem encaminhada');
+  return { sucesso: true };
+}
+
+/**
+ * Enviar sticker
+ */
+async function enviarSticker(ticketId, stickerUrl) {
+  const telefone = await _obterTelefoneDoTicket(ticketId);
+  const result = await conexaoWA.enviarSticker(telefone, stickerUrl);
+
+  const waMessageId = result.key?.id || `sticker_${Date.now()}`;
+  const ticket = await query(`SELECT contato_id FROM tickets WHERE id = $1`, [ticketId]);
+  const contatoId = ticket.rows[0]?.contato_id;
+
+  await query(
+    `INSERT INTO mensagens (ticket_id, contato_id, corpo, tipo, wa_message_id, is_from_me, media_url, status_envio)
+     VALUES ($1, $2, '🎭 Sticker', 'sticker', $3, TRUE, $4, 'enviada')`,
+    [ticketId, contatoId, waMessageId, stickerUrl]
+  );
+
+  await _atualizarPreviewTicket(ticketId, '🎭 Sticker');
+  logger.info({ ticketId, telefone }, '[WA] Sticker enviado');
+
+  return { sucesso: true, waMessageId };
+}
+
 module.exports = {
   enviarMensagemTexto,
   enviarAudio,
@@ -530,6 +604,10 @@ module.exports = {
   buscarFotoPerfil,
   processarMensagemRecebida,
   iniciarConversa,
+  reagirMensagem,
+  deletarMensagem,
+  encaminharMensagem,
+  enviarSticker,
   obterQrCode,
   obterStatus,
   reconectar,

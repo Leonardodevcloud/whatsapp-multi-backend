@@ -110,14 +110,45 @@ router.post('/iniciar-conversa', verificarToken, async (req, res, next) => {
   try {
     const { telefone, mensagem, contato_id } = req.body;
     if (!telefone || !mensagem) return res.status(400).json({ erro: 'telefone e mensagem são obrigatórios' });
+    const resultado = await whatsappService.iniciarConversa({ telefone, mensagem, contatoId: contato_id, usuarioId: req.usuario.id });
+    res.json(resultado);
+  } catch (err) { next(err); }
+});
 
-    const resultado = await whatsappService.iniciarConversa({
-      telefone,
-      mensagem,
-      contatoId: contato_id,
-      usuarioId: req.usuario.id,
-    });
+// POST /api/whatsapp/reagir — reagir a mensagem
+router.post('/reagir', verificarToken, async (req, res, next) => {
+  try {
+    const { mensagem_id, emoji } = req.body;
+    if (!mensagem_id || !emoji) return res.status(400).json({ erro: 'mensagem_id e emoji são obrigatórios' });
+    const resultado = await whatsappService.reagirMensagem(mensagem_id, emoji);
+    res.json(resultado);
+  } catch (err) { next(err); }
+});
 
+// DELETE /api/whatsapp/deletar-mensagem/:id — deletar mensagem
+router.delete('/deletar-mensagem/:id', verificarToken, async (req, res, next) => {
+  try {
+    const resultado = await whatsappService.deletarMensagem(req.params.id);
+    res.json(resultado);
+  } catch (err) { next(err); }
+});
+
+// POST /api/whatsapp/encaminhar — encaminhar mensagem para outro contato
+router.post('/encaminhar', verificarToken, async (req, res, next) => {
+  try {
+    const { mensagem_id, telefone_destino } = req.body;
+    if (!mensagem_id || !telefone_destino) return res.status(400).json({ erro: 'mensagem_id e telefone_destino são obrigatórios' });
+    const resultado = await whatsappService.encaminharMensagem(mensagem_id, telefone_destino);
+    res.json(resultado);
+  } catch (err) { next(err); }
+});
+
+// POST /api/whatsapp/enviar-sticker — enviar sticker
+router.post('/enviar-sticker', verificarToken, async (req, res, next) => {
+  try {
+    const { ticketId, stickerUrl } = req.body;
+    if (!ticketId || !stickerUrl) return res.status(400).json({ erro: 'ticketId e stickerUrl são obrigatórios' });
+    const resultado = await whatsappService.enviarSticker(ticketId, stickerUrl);
     res.json(resultado);
   } catch (err) { next(err); }
 });

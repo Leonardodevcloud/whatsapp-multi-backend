@@ -169,6 +169,81 @@ class WhatsAppConnection extends EventEmitter {
     } catch { /* não crítico */ }
   }
 
+  /**
+   * Reagir a mensagem
+   */
+  async reagirMensagem(messageId, phone, emoji) {
+    this._verificarConectado();
+    const resp = await fetch(`${this.baseUrl}/send-reaction`, {
+      method: 'POST',
+      headers: this.headers,
+      body: JSON.stringify({ messageId, phone, reaction: emoji }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.message || `HTTP ${resp.status}`);
+    return data;
+  }
+
+  /**
+   * Deletar mensagem
+   */
+  async deletarMensagem(messageId, phone) {
+    this._verificarConectado();
+    const resp = await fetch(`${this.baseUrl}/delete-message`, {
+      method: 'DELETE',
+      headers: this.headers,
+      body: JSON.stringify({ messageId, phone, owner: true }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.message || `HTTP ${resp.status}`);
+    return data;
+  }
+
+  /**
+   * Encaminhar mensagem
+   */
+  async encaminharMensagem(messageId, phoneTo) {
+    this._verificarConectado();
+    const resp = await fetch(`${this.baseUrl}/forward-message`, {
+      method: 'POST',
+      headers: this.headers,
+      body: JSON.stringify({ messageId, phone: phoneTo }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.message || `HTTP ${resp.status}`);
+    return data;
+  }
+
+  /**
+   * Enviar sticker
+   */
+  async enviarSticker(telefone, stickerUrl) {
+    this._verificarConectado();
+    const resp = await fetch(`${this.baseUrl}/send-sticker`, {
+      method: 'POST',
+      headers: this.headers,
+      body: JSON.stringify({ phone: telefone, sticker: stickerUrl }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.message || `HTTP ${resp.status}`);
+    return { key: { id: data.zapiMessageId || data.messageId || 'sent' } };
+  }
+
+  /**
+   * Enviar link com preview
+   */
+  async enviarLink(telefone, url, mensagem) {
+    this._verificarConectado();
+    const resp = await fetch(`${this.baseUrl}/send-link`, {
+      method: 'POST',
+      headers: this.headers,
+      body: JSON.stringify({ phone: telefone, message: mensagem || '', image: '', linkUrl: url, title: '', linkDescription: '' }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.message || `HTTP ${resp.status}`);
+    return { key: { id: data.zapiMessageId || data.messageId || 'sent' } };
+  }
+
   _verificarConectado() {
     if (this.status !== 'conectado') {
       // Tentar forçar se tem credenciais
