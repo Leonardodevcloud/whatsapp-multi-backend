@@ -225,7 +225,36 @@ router.post('/webhook', async (req, res) => {
     }
 
     // ---- IGNORAR notificações e status reply ----
-    if (body.isStatusReply || body.isNotification || body.isReaction) return;
+    if (body.isStatusReply || body.isNotification) return;
+
+    // ---- REAÇÃO RECEBIDA ----
+    if (body.isReaction || body.type === 'reaction') {
+      const msgId = body.messageId || body.referenceMessageId || body.reactionMessage?.messageId;
+      const emoji = body.reaction || body.reactionMessage?.reaction || body.text;
+      if (msgId && emoji) {
+        const { query: dbQuery } = require('../../config/database');
+        await dbQuery(`UPDATE mensagens SET reacao = $1 WHERE wa_message_id = $2`, [emoji, msgId]);
+        broadcast('mensagem:reacao', { waMessageId: msgId, reacao: emoji });
+        logger.info({ msgId, emoji }, '[Webhook] Reação recebida');
+      }
+      return;
+    }
+
+    // ---- MENSAGEM APAGADA (REVOKED) ----
+    if (body.type === 'revoked' || body.isRevoked) {
+      const msgId = body.messageId || body.id?.id || body.referenceMessageId;
+      if (msgId) {
+        const { query: dbQuery } = require('../../config/database');
+        // Marcar como apagada mas manter conteúdo original
+        await dbQuery(
+          `UPDATE mensagens SET deletada = TRUE, deletada_por = 'contato' WHERE wa_message_id = $1`,
+          [msgId]
+        );
+        broadcast('mensagem:deletada', { waMessageId: msgId });
+        logger.info({ msgId }, '[Webhook] Mensagem apagada pelo contato');
+      }
+      return;
+    }
 
     // ---- MENSAGEM (texto, mídia, localização, contato, sticker) ----
     if (body.phone) {

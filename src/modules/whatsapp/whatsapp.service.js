@@ -552,7 +552,7 @@ async function deletarMensagem(mensagemId) {
   await conexaoWA.deletarMensagem(msg.rows[0].wa_message_id, telefone);
 
   // Marcar como deletada no banco
-  await query(`UPDATE mensagens SET corpo = '🚫 Mensagem apagada', tipo = 'sistema', deletada = TRUE WHERE id = $1`, [mensagemId]);
+  await query(`UPDATE mensagens SET deletada = TRUE, deletada_por = 'atendente' WHERE id = $1`, [mensagemId]);
 
   logger.info({ mensagemId }, '[WA] Mensagem deletada');
   return { sucesso: true };
