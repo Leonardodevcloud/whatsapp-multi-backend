@@ -224,6 +224,12 @@ router.post('/:id/visualizar', verificarToken, async (req, res, next) => {
       broadcast('mensagem:nova', { ...msg, ticket_id: parseInt(ticketId) });
     }
 
+    // Marcar todas as mensagens recebidas como lidas
+    await dbQuery(
+      `UPDATE mensagens SET status_envio = 'lida' WHERE ticket_id = $1 AND is_from_me = FALSE AND status_envio != 'lida'`,
+      [ticketId]
+    );
+
     res.json({ sucesso: true });
   } catch (err) {
     next(err);
