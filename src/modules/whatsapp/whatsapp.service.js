@@ -560,19 +560,49 @@ async function deletarMensagem(mensagemId) {
 
 /**
  * Encaminhar mensagem para outro contato
+ * Tenta forward-message da Z-API, se falhar reenvia como texto
  */
 async function encaminharMensagem(mensagemId, telefoneDestino) {
-  const msg = await query(`SELECT wa_message_id, ticket_id FROM mensagens WHERE id = $1`, [mensagemId]);
+  const msg = await query(
+    `SELECT m.wa_message_id, m.ticket_id, m.corpo, m.tipo, m.media_url, c.nome as contato_nome
+     FROM mensagens m
+     LEFT JOIN tickets t ON t.id = m.ticket_id
+     LEFT JOIN contatos c ON c.id = t.contato_id
+     WHERE m.id = $1`, [mensagemId]
+  );
   if (msg.rows.length === 0) throw new AppError('Mensagem não encontrada', 404);
 
-  // Preciso do telefone do chat de ORIGEM (onde a mensagem está)
   const telefoneOrigem = await _obterTelefoneDoTicket(msg.rows[0].ticket_id);
   const telDestino = telefoneDestino.replace(/\D/g, '');
-  
-  await conexaoWA.encaminharMensagem(msg.rows[0].wa_message_id, telefoneOrigem, telDestino);
+  const { wa_message_id, corpo, tipo, media_url, contato_nome } = msg.rows[0];
 
-  logger.info({ mensagemId, telefoneOrigem, telefoneDestino: telDestino }, '[WA] Mensagem encaminhada');
-  return { sucesso: true };
+  // Tentar forward-message da Z-API primeiro
+  try {
+    await conexaoWA.encaminharMensagem(wa_message_id, telefoneOrigem, telDestino);
+    logger.info({ mensagemId, telefoneOrigem, telDestino }, '[WA] Mensagem encaminhada via forward');
+    return { sucesso: true, metodo: 'forward' };
+  } catch (forwardErr) {
+    logger.warn({ err: forwardErr.message }, '[WA] forward-message falhou, reenviando como texto');
+  }
+
+  // Fallback — reenviar conteúdo como nova mensagem
+  const prefixo = `📨 *Encaminhada de ${contato_nome || 'contato'}:*\n\n`;
+  
+  if (tipo === 'imagem' && media_url) {
+    await conexaoWA.enviarImagem(telDestino, media_url, prefixo + (corpo || ''));
+  } else if (tipo === 'audio' && media_url) {
+    // Áudio não suporta prefixo, enviar texto antes
+    await conexaoWA.enviarTexto(telDestino, prefixo + '🎵 Áudio encaminhado');
+  } else if (tipo === 'video' && media_url) {
+    await conexaoWA.enviarTexto(telDestino, prefixo + (corpo || '🎥 Vídeo'));
+  } else if (tipo === 'documento' && media_url) {
+    await conexaoWA.enviarTexto(telDestino, prefixo + (corpo || '📄 Documento'));
+  } else {
+    await conexaoWA.enviarTexto(telDestino, prefixo + (corpo || ''));
+  }
+
+  logger.info({ mensagemId, telDestino, tipo }, '[WA] Mensagem reenviada como texto (fallback)');
+  return { sucesso: true, metodo: 'reenvio' };
 }
 
 /**
