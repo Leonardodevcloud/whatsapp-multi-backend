@@ -560,27 +560,32 @@ async function _atualizarPreviewTicket(ticketId, preview) {
 
 /**
  * Resolver menções @lid no texto de mensagens de grupo.
- * Substitui padrões como @1243243424 (que são LIDs) pelo nome do contato se encontrado.
+ * Substitui padrões como @121762792661023 pelo nome do contato se encontrado.
+ * Se não encontrar, substitui por @participante (mais limpo que o número).
  */
 async function _resolverMencoesLid(client, texto) {
-  // Regex: captura @ seguido de 10+ dígitos (LIDs típicos)
-  const mencoes = texto.match(/@(\d{10,})/g);
+  // Regex: captura @ seguido de 8+ dígitos (LIDs e telefones)
+  const mencoes = texto.match(/@(\d{8,})/g);
   if (!mencoes || mencoes.length === 0) return texto;
 
   let textoResolvido = texto;
 
   for (const mencao of mencoes) {
-    const lidNumero = mencao.replace('@', '');
+    const numero = mencao.replace('@', '');
 
-    // Buscar contato por lid ou telefone
+    // Buscar contato por lid, telefone, ou telefone parcial
     const contato = await client.query(
-      `SELECT nome FROM contatos WHERE lid = $1 OR telefone = $1 LIMIT 1`,
-      [lidNumero]
+      `SELECT nome FROM contatos
+       WHERE lid = $1 OR telefone = $1 OR telefone LIKE '%' || $1 || '%'
+       LIMIT 1`,
+      [numero]
     );
 
     if (contato.rows.length > 0 && contato.rows[0].nome) {
-      // Substituir @lid pelo @nome
       textoResolvido = textoResolvido.replace(mencao, `@${contato.rows[0].nome}`);
+    } else {
+      // Não encontrou — manter como @participante (mais limpo)
+      textoResolvido = textoResolvido.replace(mencao, '@participante');
     }
   }
 
