@@ -99,7 +99,7 @@ async function _calcularTempoRespostaSeNecessario(ticketId) {
  *     Se encontra, UNIFICA: atualiza telefone para o real, preserva lid.
  *     Também migra tickets do contato LID duplicado se houver.
  */
-async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessageId, isGroup, fromMe, mediaUrl, nomeParticipante, isLidRaw }) {
+async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessageId, isGroup, fromMe, mediaUrl, nomeParticipante, isLidRaw, chatLid }) {
   const client = await getClient();
 
   try {
@@ -115,135 +115,111 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
     const telefoneLimpo = telefone.replace('@c.us', '').replace('@lid', '').replace('@s.whatsapp.net', '').replace(/\D/g, '');
 
     // Detectar se é LID:
-    // 1. Flag isLidRaw (webhook veio com @lid no raw phone) — MAIS CONFIÁVEL
-    // 2. Fallback: telefone com mais de 13 dígitos e não é grupo
-    // 3. Fallback: telefone não começa com 55 (Brasil) e tem 12+ dígitos
+    // 1. Flag isLidRaw (webhook veio com @lid no raw phone)
+    // 2. chatLid existe e é diferente do telefone (Z-API mandou os dois)
+    // 3. Fallback: telefone longo ou não-brasileiro
     const isLid = (isLidRaw === true) ||
       (telefoneLimpo.length > 13 && !isGroup) ||
       (telefoneLimpo.length >= 12 && !telefoneLimpo.startsWith('55') && !isGroup);
 
-    logger.info(`[WA] Buscando contato tel=${telefoneLimpo} (raw=${telefone}) fromMe=${fromMe} isLid=${isLid} isLidRaw=${isLidRaw} nome=${nome}`);
+    logger.info(`[WA] Buscando contato tel=${telefoneLimpo} chatLid=${chatLid} fromMe=${fromMe} isLid=${isLid} isLidRaw=${isLidRaw} nome=${nome}`);
 
-    let contatoResult;
+    let contatoResult = { rows: [] };
 
-    // ====== ESTRATÉGIA DE BUSCA DE CONTATO ======
+    // ============================================================
+    // ESTRATÉGIA DEFINITIVA DE BUSCA (usa chatLid da Z-API)
+    //
+    // A Z-API manda body.chatLid em TODOS os webhooks de mensagem.
+    // - fromMe=true:  chatLid="123@lid", phone="123@lid" (ambos LID)
+    // - fromMe=false:  chatLid="123@lid", phone="5571XXXXX" (LID + real!)
+    //
+    // Então chatLid é a CHAVE ESTÁVEL pra unificar contatos.
+    // ============================================================
 
-    // PASSO 1: Se é LID, buscar pelo campo lid primeiro
-    if (isLid) {
+    // PASSO 0 (PRIORITÁRIO): Se temos chatLid, buscar contato pelo campo lid
+    if (chatLid && chatLid.length > 0) {
+      contatoResult = await client.query(
+        `SELECT id, nome, telefone, avatar_url, lid FROM contatos WHERE lid = $1`,
+        [chatLid]
+      );
+      if (contatoResult.rows.length > 0) {
+        logger.info(`[WA] ✅ Contato encontrado por chatLid: lid=${chatLid} → id=${contatoResult.rows[0].id} tel=${contatoResult.rows[0].telefone}`);
+
+        // Se agora temos o telefone REAL (fromMe=false, não é LID), atualizar o contato
+        if (!isLid && contatoResult.rows[0].telefone !== telefoneLimpo) {
+          await client.query(
+            `UPDATE contatos SET telefone = $1, atualizado_em = NOW() WHERE id = $2`,
+            [telefoneLimpo, contatoResult.rows[0].id]
+          );
+          logger.info(`[WA] ✅ UNIFICAÇÃO VIA chatLid: telefone atualizado ${contatoResult.rows[0].telefone} → ${telefoneLimpo}`);
+        }
+      }
+    }
+
+    // PASSO 1: Se é LID (e chatLid não encontrou), buscar pelo campo lid com o telefone
+    if (contatoResult.rows.length === 0 && isLid) {
       contatoResult = await client.query(
         `SELECT id, nome, telefone, avatar_url, lid FROM contatos WHERE lid = $1`,
         [telefoneLimpo]
       );
       if (contatoResult.rows.length > 0) {
-        logger.info(`[WA] Contato encontrado por LID: ${telefoneLimpo} → tel=${contatoResult.rows[0].telefone}`);
+        logger.info(`[WA] Contato encontrado por LID no campo lid: ${telefoneLimpo}`);
       }
     }
 
     // PASSO 2: Buscar por telefone exato
-    if (!contatoResult || contatoResult.rows.length === 0) {
+    if (contatoResult.rows.length === 0) {
       contatoResult = await client.query(
         `SELECT id, nome, telefone, avatar_url, lid FROM contatos WHERE telefone = $1`,
         [telefoneLimpo]
       );
     }
 
-    // PASSO 3: Se é fromMe com LID e não encontrou, buscar pelo nome (chatName) pra mapear
+    // PASSO 3: Se é fromMe com LID e não encontrou, buscar pelo nome (chatName)
     if (contatoResult.rows.length === 0 && isLid && fromMe && nome && nome !== telefoneLimpo) {
       contatoResult = await client.query(
         `SELECT id, nome, telefone, avatar_url, lid FROM contatos WHERE nome = $1 AND lid IS NULL ORDER BY id DESC LIMIT 1`,
         [nome]
       );
       if (contatoResult.rows.length > 0) {
-        // Mapear o LID a este contato
-        await client.query(`UPDATE contatos SET lid = $1 WHERE id = $2`, [telefoneLimpo, contatoResult.rows[0].id]);
-        logger.info(`[WA] LID mapeado: ${telefoneLimpo} → contato ${contatoResult.rows[0].telefone} (${nome})`);
+        const lidValue = chatLid || telefoneLimpo;
+        await client.query(`UPDATE contatos SET lid = $1, atualizado_em = NOW() WHERE id = $2`, [lidValue, contatoResult.rows[0].id]);
+        logger.info(`[WA] LID mapeado por nome: ${lidValue} → contato ${contatoResult.rows[0].id} (${nome})`);
       }
     }
 
-    // ====== PASSO 4 (NOVO): UNIFICAÇÃO LID → CONTATO REAL ======
-    // Quando o contato RESPONDE (fromMe=false) com número real e não foi encontrado,
-    // buscar contato existente cujo telefone é LID (>13 dígitos) E nome bate
-    if (contatoResult.rows.length === 0 && !isLid && !fromMe && nome && nome !== telefoneLimpo) {
-      // Buscar contato com telefone LID-like que tem o mesmo nome
+    // PASSO 4: fromMe=false com número real, buscar por nome em contatos LID
+    if (contatoResult.rows.length === 0 && !isLid && !fromMe && nome && nome !== telefoneLimpo && !/^\d+$/.test(nome)) {
       const lidMatch = await client.query(
         `SELECT id, nome, telefone, avatar_url, lid FROM contatos
-         WHERE nome = $1 AND LENGTH(telefone) > 13
+         WHERE LOWER(nome) = LOWER($1) AND (LENGTH(telefone) > 13 OR lid IS NOT NULL)
          ORDER BY id DESC LIMIT 1`,
         [nome]
       );
-
       if (lidMatch.rows.length > 0) {
         const contatoLid = lidMatch.rows[0];
-        logger.info({
-          contatoId: contatoLid.id,
-          nomeMatch: nome,
-          telefoneLid: contatoLid.telefone,
-          telefoneReal: telefoneLimpo,
-        }, '[WA] UNIFICAÇÃO LID: contato encontrado por nome, atualizando telefone');
+        logger.info({ contatoId: contatoLid.id, telefoneLid: contatoLid.telefone, telefoneReal: telefoneLimpo },
+          '[WA] UNIFICAÇÃO LID por nome: atualizando telefone');
 
-        // Atualizar: telefone real + preservar LID antigo no campo lid
+        const lidValue = chatLid || contatoLid.lid || contatoLid.telefone;
         await client.query(
           `UPDATE contatos SET telefone = $1, lid = $2, atualizado_em = NOW() WHERE id = $3`,
-          [telefoneLimpo, contatoLid.telefone, contatoLid.id]
+          [telefoneLimpo, lidValue, contatoLid.id]
         );
-
         contatoResult = await client.query(
           `SELECT id, nome, telefone, avatar_url, lid FROM contatos WHERE id = $1`,
           [contatoLid.id]
         );
-
-        logger.info(`[WA] UNIFICAÇÃO OK: contato ${contatoLid.id} atualizado — LID ${contatoLid.telefone} → tel real ${telefoneLimpo}`);
       }
     }
 
-    // PASSO 5: Se AINDA não encontrou e não é LID, buscar por LID no campo lid
-    if (contatoResult.rows.length === 0 && !isLid) {
-      // Nada a fazer aqui — o telefone real é novo mesmo
-    }
-
-    // PASSO 6: Verificar se existe contato DUPLICADO com LID como telefone
-    // E OUTRO contato com telefone real — merge de tickets se necessário
-    if (contatoResult.rows.length === 0 && !isLid && !fromMe) {
-      // Tentar por nome (quando nome não é número)
-      if (nome && !/^\d+$/.test(nome)) {
-        const nomeBusca = await client.query(
-          `SELECT id, nome, telefone, avatar_url, lid FROM contatos
-           WHERE LOWER(nome) = LOWER($1) AND LENGTH(telefone) > 13
-           ORDER BY criado_em DESC LIMIT 1`,
-          [nome]
-        );
-        if (nomeBusca.rows.length > 0) {
-          const contatoLid = nomeBusca.rows[0];
-          logger.info({
-            contatoId: contatoLid.id,
-            telefoneLid: contatoLid.telefone,
-            telefoneReal: telefoneLimpo,
-          }, '[WA] UNIFICAÇÃO LID (por nome): atualizando telefone');
-
-          await client.query(
-            `UPDATE contatos SET telefone = $1, lid = $2, atualizado_em = NOW() WHERE id = $3`,
-            [telefoneLimpo, contatoLid.telefone, contatoLid.id]
-          );
-
-          contatoResult = await client.query(
-            `SELECT id, nome, telefone, avatar_url, lid FROM contatos WHERE id = $1`,
-            [contatoLid.id]
-          );
-        }
-      }
-    }
-
-    // ====== PASSO 7 (CRÍTICO): MATCH POR TICKET RECENTE ======
-    // Quando o nome é só número (Z-API não mandou nome real) e não encontrou contato,
-    // buscar contato LID que tenha ticket ativo recente (última 1h).
-    // Lógica: se eu mandei msg pelo celular (fromMe=true, cria ticket LID) e a pessoa
-    // respondeu (fromMe=false, número real), o ticket LID foi atualizado recentemente.
+    // PASSO 5: Match por ticket recente (quando nome é só número)
     if (contatoResult.rows.length === 0 && !isLid && !fromMe) {
       const ticketLidMatch = await client.query(
         `SELECT c.id, c.nome, c.telefone, c.avatar_url, c.lid
          FROM contatos c
          JOIN tickets t ON t.contato_id = c.id
-         WHERE LENGTH(c.telefone) > 13
+         WHERE (LENGTH(c.telefone) > 13 OR c.lid IS NOT NULL)
            AND t.status IN ('pendente', 'aberto', 'aguardando')
            AND t.ultima_mensagem_em > NOW() - INTERVAL '2 hours'
          ORDER BY t.ultima_mensagem_em DESC
@@ -251,62 +227,35 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
         []
       );
 
-      // Se encontrou apenas 1 candidato, é quase certo que é ele
       if (ticketLidMatch.rows.length === 1) {
         const contatoLid = ticketLidMatch.rows[0];
-        logger.info({
-          contatoId: contatoLid.id,
-          nomeLid: contatoLid.nome,
-          telefoneLid: contatoLid.telefone,
-          telefoneReal: telefoneLimpo,
-        }, '[WA] UNIFICAÇÃO LID (por ticket recente — único candidato): atualizando');
+        logger.info({ contatoId: contatoLid.id, nomeLid: contatoLid.nome, telefoneReal: telefoneLimpo },
+          '[WA] UNIFICAÇÃO por ticket recente (único candidato)');
 
+        const lidValue = chatLid || contatoLid.lid || contatoLid.telefone;
         await client.query(
           `UPDATE contatos SET telefone = $1, lid = $2, atualizado_em = NOW() WHERE id = $3`,
-          [telefoneLimpo, contatoLid.telefone, contatoLid.id]
+          [telefoneLimpo, lidValue, contatoLid.id]
         );
-
-        // Atualizar nome se o que veio não é número
         if (nome && !/^\d+$/.test(nome) && nome !== contatoLid.nome) {
           await client.query(`UPDATE contatos SET nome = $1 WHERE id = $2`, [nome, contatoLid.id]);
         }
-
         contatoResult = await client.query(
           `SELECT id, nome, telefone, avatar_url, lid FROM contatos WHERE id = $1`,
           [contatoLid.id]
         );
-
-        logger.info(`[WA] UNIFICAÇÃO OK (ticket recente): ${contatoLid.telefone} → ${telefoneLimpo}`);
-
-      } else if (ticketLidMatch.rows.length > 1) {
-        // Múltiplos candidatos — tentar match por nome se disponível
-        if (nome && !/^\d+$/.test(nome)) {
-          const matchPorNome = ticketLidMatch.rows.find(c => c.nome?.toLowerCase() === nome.toLowerCase());
-          if (matchPorNome) {
-            logger.info({
-              contatoId: matchPorNome.id,
-              nomeLid: matchPorNome.nome,
-              telefoneReal: telefoneLimpo,
-            }, '[WA] UNIFICAÇÃO LID (ticket recente + nome match): atualizando');
-
-            await client.query(
-              `UPDATE contatos SET telefone = $1, lid = $2, atualizado_em = NOW() WHERE id = $3`,
-              [telefoneLimpo, matchPorNome.telefone, matchPorNome.id]
-            );
-
-            contatoResult = await client.query(
-              `SELECT id, nome, telefone, avatar_url, lid FROM contatos WHERE id = $1`,
-              [matchPorNome.id]
-            );
-          }
-        }
-
-        // Se ainda não encontrou, NÃO unificar — criar contato novo é mais seguro
-        if (contatoResult.rows.length === 0) {
-          logger.warn({
-            telefoneReal: telefoneLimpo,
-            candidatos: ticketLidMatch.rows.map(c => ({ id: c.id, nome: c.nome, tel: c.telefone })),
-          }, '[WA] Múltiplos candidatos LID — não unificou (ambíguo)');
+      } else if (ticketLidMatch.rows.length > 1 && nome && !/^\d+$/.test(nome)) {
+        const matchPorNome = ticketLidMatch.rows.find(c => c.nome?.toLowerCase() === nome.toLowerCase());
+        if (matchPorNome) {
+          const lidValue = chatLid || matchPorNome.lid || matchPorNome.telefone;
+          await client.query(
+            `UPDATE contatos SET telefone = $1, lid = $2, atualizado_em = NOW() WHERE id = $3`,
+            [telefoneLimpo, lidValue, matchPorNome.id]
+          );
+          contatoResult = await client.query(
+            `SELECT id, nome, telefone, avatar_url, lid FROM contatos WHERE id = $1`,
+            [matchPorNome.id]
+          );
         }
       }
     }
@@ -320,8 +269,8 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
         avatarUrl = await buscarFotoPerfil(telefoneLimpo);
       } catch { /* não crítico */ }
 
-      // Se é LID, salvar o LID no campo lid e usar o LID como telefone temporário
-      const lidValue = isLid ? telefoneLimpo : null;
+      // Se é LID, salvar chatLid ou telefone como lid
+      const lidValue = isLid ? (chatLid || telefoneLimpo) : (chatLid || null);
       const telParaSalvar = telefoneLimpo;
 
       const novo = await client.query(
@@ -330,22 +279,29 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
         [nome || telefoneLimpo, telParaSalvar, avatarUrl, lidValue]
       );
       contatoId = novo.rows[0].id;
-      logger.info({ contatoId, telefone: telParaSalvar, nome, lid: lidValue, temAvatar: !!avatarUrl }, '[WA] Novo contato');
+      logger.info({ contatoId, telefone: telParaSalvar, nome, lid: lidValue, chatLid, temAvatar: !!avatarUrl }, '[WA] Novo contato');
     } else {
       contatoId = contatoResult.rows[0].id;
 
       // Atualizar nome se mudou (e não é um número genérico)
-      if (nome && nome !== telefoneLimpo && nome !== contatoResult.rows[0].nome) {
+      if (nome && nome !== telefoneLimpo && !/^\d+$/.test(nome) && nome !== contatoResult.rows[0].nome) {
         await client.query(`UPDATE contatos SET nome = $1, atualizado_em = NOW() WHERE id = $2`, [nome, contatoId]);
       }
 
       // Se veio com número real (não LID) e o contato está salvo com LID como telefone, atualizar
       if (!isLid && contatoResult.rows[0].telefone !== telefoneLimpo && contatoResult.rows[0].telefone?.length > 13) {
+        const lidValue = chatLid || contatoResult.rows[0].lid || contatoResult.rows[0].telefone;
         await client.query(
           `UPDATE contatos SET telefone = $1, lid = $2, atualizado_em = NOW() WHERE id = $3`,
-          [telefoneLimpo, contatoResult.rows[0].telefone, contatoId]
+          [telefoneLimpo, lidValue, contatoId]
         );
         logger.info(`[WA] Telefone atualizado: LID ${contatoResult.rows[0].telefone} → real ${telefoneLimpo}`);
+      }
+
+      // Se contato não tem lid salvo mas temos chatLid, salvar
+      if (chatLid && !contatoResult.rows[0].lid) {
+        await client.query(`UPDATE contatos SET lid = $1, atualizado_em = NOW() WHERE id = $2`, [chatLid, contatoId]);
+        logger.info(`[WA] chatLid salvo: ${chatLid} → contato ${contatoId}`);
       }
 
       // Buscar foto se não tem
