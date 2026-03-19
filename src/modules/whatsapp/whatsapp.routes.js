@@ -1,5 +1,5 @@
 // src/modules/whatsapp/whatsapp.routes.js
-// Rotas WhatsApp — Z-API + Webhook (CORRIGIDO — revoke pago + stickers galeeeeeria)
+// Rotas WhatsApp — Z-API + Webhook (CORRIGIDO — revoke pago + stickers galeria)
 
 const { Router } = require('express');
 const whatsappService = require('./whatsapp.service');
@@ -416,7 +416,19 @@ router.post('/webhook', async (req, res) => {
       let nomeParticipante = null;
       if (isGroup) {
         nome = body.chatName || body.groupName || `Grupo ${telefone}`;
-        nomeParticipante = body.senderName || body.pushName || body.participantName || 'Participante';
+        // Nome do participante — Z-API envia de várias formas
+        nomeParticipante = body.senderName || body.pushName || body.participantName || body.notifyName || 'Participante';
+
+        // Log extra pra debug de grupos
+        logger.info({
+          chatName: body.chatName,
+          senderName: body.senderName,
+          pushName: body.pushName,
+          participantName: body.participantName,
+          participant: body.participant,
+          senderPhone: body.senderPhone,
+          mentionedList: body.mentionedList || null,
+        }, '[Webhook] Grupo DEBUG — participante');
       } else {
         nome = body.chatName || body.senderName || body.pushName || body.name || telefone;
       }
