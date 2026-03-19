@@ -156,9 +156,9 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
         logger.info(`[WA] Contato encontrado por telefone real=${telefoneLimpo} → id=${contatoExistente.id}`);
 
         // 2️⃣.B AUTO-MERGE: Se NÃO é fromMe, verificar se existe contato LID recente
-        // que deveria ser o mesmo (você mandou pelo celular → criou LID → pessoa respondeu → telefone real)
-        if (!fromMe && !isGroup) {
-          // Buscar contatos LID com ticket ativo recente (últimas 4h)
+        // que deveria ser o mesmo (você mandou pelo celular → criou LID → pessoa respondeu)
+        // CUIDADO: SÓ mergear quando temos CERTEZA (nomes batem). Sem chatLid é arriscado.
+        if (!fromMe && !isGroup && nome && !/^\d+$/.test(nome)) {
           const lidRecente = await client.query(
             `SELECT c.id, c.nome, c.telefone, c.lid
              FROM contatos c
@@ -167,36 +167,27 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
                AND (LENGTH(c.telefone) > 13 OR (c.lid IS NOT NULL AND c.telefone != c.lid))
                AND t.status IN ('pendente', 'aberto', 'aguardando')
                AND t.ultima_mensagem_em > NOW() - INTERVAL '4 hours'
+               AND LOWER(c.nome) = LOWER($2)
              ORDER BY t.ultima_mensagem_em DESC
              LIMIT 1`,
-            [contatoExistente.id]
+            [contatoExistente.id, nome]
           );
 
           if (lidRecente.rows.length === 1) {
             const contatoLid = lidRecente.rows[0];
-            // Verificar que o nome bate (quando disponível) OU que só tem 1 candidato
-            const nomesBatem = nome && !/^\d+$/.test(nome) && contatoLid.nome?.toLowerCase() === nome.toLowerCase();
-            const unicoCandidato = lidRecente.rows.length === 1;
+            logger.info(`[WA] 🔀 AUTO-MERGE: LID contato ${contatoLid.id} (${contatoLid.telefone}) → real contato ${contatoExistente.id} (${telefoneLimpo}) [nome=${nome}]`);
 
-            if (nomesBatem || unicoCandidato) {
-              logger.info(`[WA] 🔀 AUTO-MERGE: LID contato ${contatoLid.id} (${contatoLid.telefone}) → real contato ${contatoExistente.id} (${telefoneLimpo})`);
+            await client.query(`UPDATE tickets SET contato_id = $1 WHERE contato_id = $2`, [contatoExistente.id, contatoLid.id]);
+            await client.query(`UPDATE mensagens SET contato_id = $1 WHERE contato_id = $2`, [contatoExistente.id, contatoLid.id]);
 
-              // Mover tickets e mensagens do LID pro real
-              await client.query(`UPDATE tickets SET contato_id = $1 WHERE contato_id = $2`, [contatoExistente.id, contatoLid.id]);
-              await client.query(`UPDATE mensagens SET contato_id = $1 WHERE contato_id = $2`, [contatoExistente.id, contatoLid.id]);
-
-              // Salvar o LID no contato real
-              const lidValue = contatoLid.lid || contatoLid.telefone;
-              if (!contatoExistente.lid) {
-                await client.query(`UPDATE contatos SET lid = $1, atualizado_em = NOW() WHERE id = $2`, [lidValue, contatoExistente.id]);
-              }
-
-              // Deletar contato LID
-              await client.query(`DELETE FROM contato_tags WHERE contato_id = $1`, [contatoLid.id]);
-              await client.query(`DELETE FROM contatos WHERE id = $1`, [contatoLid.id]);
-
-              logger.info(`[WA] 🔀 AUTO-MERGE concluído: contato LID ${contatoLid.id} deletado, tudo no contato ${contatoExistente.id}`);
+            const lidValue = contatoLid.lid || contatoLid.telefone;
+            if (!contatoExistente.lid) {
+              await client.query(`UPDATE contatos SET lid = $1, atualizado_em = NOW() WHERE id = $2`, [lidValue, contatoExistente.id]);
             }
+
+            await client.query(`DELETE FROM contato_tags WHERE contato_id = $1`, [contatoLid.id]);
+            await client.query(`DELETE FROM contatos WHERE id = $1`, [contatoLid.id]);
+            logger.info(`[WA] 🔀 AUTO-MERGE concluído: contato LID ${contatoLid.id} deletado`);
           }
         }
       }
