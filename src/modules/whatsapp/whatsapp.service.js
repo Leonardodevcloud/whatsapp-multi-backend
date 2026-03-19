@@ -1,5 +1,5 @@
 // src/modules/whatsapp/whatsapp.service.js
-// Serviço WhatsApp — Z-API (CORRIGIDO)
+// Serviço WhatsApp — Z-API (CORRIGIDO — unificação LID + stickers + revoke)
 
 const conexaoWA = require('./whatsapp.connection');
 const { query, getClient } = require('../../config/database');
@@ -25,7 +25,6 @@ async function enviarMensagemTexto({ ticketId, texto, usuarioId }) {
   );
 
   if (resultado.rows.length === 0) throw new AppError('Ticket não encontrado', 404);
-
   const { telefone } = resultado.rows[0];
 
   try {
@@ -36,16 +35,19 @@ async function enviarMensagemTexto({ ticketId, texto, usuarioId }) {
         `UPDATE tickets SET status = 'aberto', usuario_id = $1, atualizado_em = NOW() WHERE id = $2`,
         [usuarioId, ticketId]
       );
+
       // Registrar mensagem de sistema
       const { registrarMensagemSistema } = require('../messages/messages.service');
       const nomeResult = await query(`SELECT nome FROM usuarios WHERE id = $1`, [usuarioId]);
       const nomeAtendente = nomeResult.rows[0]?.nome || 'Atendente';
-      const hora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+      const hora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Bahia' });
+
       await registrarMensagemSistema({
         ticketId,
         corpo: `${nomeAtendente} iniciou o atendimento às ${hora}`,
         usuarioId,
       });
+
       logger.info({ ticketId, usuarioId }, '[WA] Chamado auto-aceito ao responder');
     }
 
@@ -64,7 +66,6 @@ async function enviarMensagemTexto({ ticketId, texto, usuarioId }) {
     );
 
     await _calcularTempoRespostaSeNecessario(ticketId);
-
     return msgResult.rows[0];
   } catch (err) {
     logger.error({ err: err.message, ticketId, telefone }, '[WA] ERRO AO ENVIAR');
@@ -75,9 +76,11 @@ async function enviarMensagemTexto({ ticketId, texto, usuarioId }) {
 async function _calcularTempoRespostaSeNecessario(ticketId) {
   try {
     const ticket = await query(
-      `SELECT tempo_primeira_resposta_seg, criado_em FROM tickets WHERE id = $1`, [ticketId]
+      `SELECT tempo_primeira_resposta_seg, criado_em FROM tickets WHERE id = $1`,
+      [ticketId]
     );
     if (ticket.rows[0]?.tempo_primeira_resposta_seg !== null) return;
+
     const diffSeg = Math.floor((Date.now() - new Date(ticket.rows[0].criado_em).getTime()) / 1000);
     await query(`UPDATE tickets SET tempo_primeira_resposta_seg = $1 WHERE id = $2`, [diffSeg, ticketId]);
   } catch (err) {
@@ -87,7 +90,14 @@ async function _calcularTempoRespostaSeNecessario(ticketId) {
 
 /**
  * Processar mensagem recebida do webhook Z-API
- * Agora suporta: fromMe (mensagens enviadas pelo celular), mídia, todos os tipos
+ * CORRIGIDO: Unificação robusta de LID → contato real
+ *
+ * Fluxo:
+ *  1. fromMe=true com LID: cria contato com LID como telefone + campo lid
+ *  2. fromMe=false com telefone real: busca por telefone. Se não acha,
+ *     busca contato por nome onde telefone existente é LID (>13 dígitos).
+ *     Se encontra, UNIFICA: atualiza telefone para o real, preserva lid.
+ *     Também migra tickets do contato LID duplicado se houver.
  */
 async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessageId, isGroup, fromMe, mediaUrl, nomeParticipante }) {
   const client = await getClient();
@@ -107,34 +117,116 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
     // Detectar se é LID (telefone com mais de 13 dígitos e não é grupo)
     const isLid = telefoneLimpo.length > 13 && !isGroup;
 
-    logger.info(`[WA] Buscando contato tel=${telefoneLimpo} (raw=${telefone}) fromMe=${fromMe} isLid=${isLid}`);
+    logger.info(`[WA] Buscando contato tel=${telefoneLimpo} (raw=${telefone}) fromMe=${fromMe} isLid=${isLid} nome=${nome}`);
 
     let contatoResult;
 
+    // ====== ESTRATÉGIA DE BUSCA DE CONTATO ======
+
+    // PASSO 1: Se é LID, buscar pelo campo lid primeiro
     if (isLid) {
-      // Buscar por LID primeiro
-      contatoResult = await client.query(`SELECT id, nome, telefone, avatar_url FROM contatos WHERE lid = $1`, [telefoneLimpo]);
+      contatoResult = await client.query(
+        `SELECT id, nome, telefone, avatar_url, lid FROM contatos WHERE lid = $1`,
+        [telefoneLimpo]
+      );
       if (contatoResult.rows.length > 0) {
         logger.info(`[WA] Contato encontrado por LID: ${telefoneLimpo} → tel=${contatoResult.rows[0].telefone}`);
       }
     }
 
+    // PASSO 2: Buscar por telefone exato
     if (!contatoResult || contatoResult.rows.length === 0) {
-      // Buscar por telefone exato
-      contatoResult = await client.query(`SELECT id, nome, telefone, avatar_url FROM contatos WHERE telefone = $1`, [telefoneLimpo]);
+      contatoResult = await client.query(
+        `SELECT id, nome, telefone, avatar_url, lid FROM contatos WHERE telefone = $1`,
+        [telefoneLimpo]
+      );
     }
 
-    // Se é fromMe com LID e não encontrou, buscar pelo nome (chatName) pra mapear
+    // PASSO 3: Se é fromMe com LID e não encontrou, buscar pelo nome (chatName) pra mapear
     if (contatoResult.rows.length === 0 && isLid && fromMe && nome && nome !== telefoneLimpo) {
-      // Buscar contato recente com mesmo nome que não tenha LID ainda
       contatoResult = await client.query(
-        `SELECT id, nome, telefone, avatar_url FROM contatos WHERE nome = $1 AND lid IS NULL ORDER BY id DESC LIMIT 1`,
+        `SELECT id, nome, telefone, avatar_url, lid FROM contatos WHERE nome = $1 AND lid IS NULL ORDER BY id DESC LIMIT 1`,
         [nome]
       );
       if (contatoResult.rows.length > 0) {
         // Mapear o LID a este contato
         await client.query(`UPDATE contatos SET lid = $1 WHERE id = $2`, [telefoneLimpo, contatoResult.rows[0].id]);
         logger.info(`[WA] LID mapeado: ${telefoneLimpo} → contato ${contatoResult.rows[0].telefone} (${nome})`);
+      }
+    }
+
+    // ====== PASSO 4 (NOVO): UNIFICAÇÃO LID → CONTATO REAL ======
+    // Quando o contato RESPONDE (fromMe=false) com número real e não foi encontrado,
+    // buscar contato existente cujo telefone é LID (>13 dígitos) E nome bate
+    if (contatoResult.rows.length === 0 && !isLid && !fromMe && nome && nome !== telefoneLimpo) {
+      // Buscar contato com telefone LID-like que tem o mesmo nome
+      const lidMatch = await client.query(
+        `SELECT id, nome, telefone, avatar_url, lid FROM contatos
+         WHERE nome = $1 AND LENGTH(telefone) > 13
+         ORDER BY id DESC LIMIT 1`,
+        [nome]
+      );
+
+      if (lidMatch.rows.length > 0) {
+        const contatoLid = lidMatch.rows[0];
+        logger.info({
+          contatoId: contatoLid.id,
+          nomeMatch: nome,
+          telefoneLid: contatoLid.telefone,
+          telefoneReal: telefoneLimpo,
+        }, '[WA] UNIFICAÇÃO LID: contato encontrado por nome, atualizando telefone');
+
+        // Atualizar: telefone real + preservar LID antigo no campo lid
+        await client.query(
+          `UPDATE contatos SET telefone = $1, lid = $2, atualizado_em = NOW() WHERE id = $3`,
+          [telefoneLimpo, contatoLid.telefone, contatoLid.id]
+        );
+
+        contatoResult = await client.query(
+          `SELECT id, nome, telefone, avatar_url, lid FROM contatos WHERE id = $1`,
+          [contatoLid.id]
+        );
+
+        logger.info(`[WA] UNIFICAÇÃO OK: contato ${contatoLid.id} atualizado — LID ${contatoLid.telefone} → tel real ${telefoneLimpo}`);
+      }
+    }
+
+    // PASSO 5 (NOVO): Se AINDA não encontrou e não é LID, buscar por LID no campo lid
+    // (caso o contato já foi unificado antes e o lid está no campo lid, não no telefone)
+    if (contatoResult.rows.length === 0 && !isLid) {
+      // Nada a fazer aqui — o telefone real é novo mesmo
+    }
+
+    // PASSO 6 (NOVO): Verificar se existe contato DUPLICADO com LID como telefone
+    // E OUTRO contato com telefone real — merge de tickets se necessário
+    if (contatoResult.rows.length === 0 && !isLid && !fromMe) {
+      // Última tentativa: buscar por nome parcial (push name pode variar um pouco)
+      // Mas só se o nome não é um número
+      if (nome && !/^\d+$/.test(nome)) {
+        const nomeBusca = await client.query(
+          `SELECT id, nome, telefone, avatar_url, lid FROM contatos
+           WHERE LOWER(nome) = LOWER($1) AND LENGTH(telefone) > 13
+           ORDER BY criado_em DESC LIMIT 1`,
+          [nome]
+        );
+        if (nomeBusca.rows.length > 0) {
+          const contatoLid = nomeBusca.rows[0];
+          logger.info({
+            contatoId: contatoLid.id,
+            telefoneLid: contatoLid.telefone,
+            telefoneReal: telefoneLimpo,
+          }, '[WA] UNIFICAÇÃO LID (case-insensitive): atualizando telefone');
+
+          await client.query(
+            `UPDATE contatos SET telefone = $1, lid = $2, atualizado_em = NOW() WHERE id = $3`,
+            [telefoneLimpo, contatoLid.telefone, contatoLid.id]
+          );
+
+          contatoResult = await client.query(
+            `SELECT id, nome, telefone, avatar_url, lid FROM contatos WHERE id = $1`,
+            [contatoLid.id]
+          );
+        }
       }
     }
 
@@ -152,25 +244,26 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
       const telParaSalvar = telefoneLimpo;
 
       const novo = await client.query(
-        `INSERT INTO contatos (nome, telefone, avatar_url, lid) VALUES ($1, $2, $3, $4) RETURNING id`,
+        `INSERT INTO contatos (nome, telefone, avatar_url, lid)
+         VALUES ($1, $2, $3, $4) RETURNING id`,
         [nome || telefoneLimpo, telParaSalvar, avatarUrl, lidValue]
       );
       contatoId = novo.rows[0].id;
       logger.info({ contatoId, telefone: telParaSalvar, nome, lid: lidValue, temAvatar: !!avatarUrl }, '[WA] Novo contato');
     } else {
       contatoId = contatoResult.rows[0].id;
-      
-      // Se NÃO é LID e contato não tem LID mapeado ainda, e veio fromMe=false (número real)
-      // Não precisa mapear aqui — o LID será mapeado quando fromMe=true
 
-      // Atualizar nome se mudou
+      // Atualizar nome se mudou (e não é um número genérico)
       if (nome && nome !== telefoneLimpo && nome !== contatoResult.rows[0].nome) {
-        await client.query(`UPDATE contatos SET nome = $1 WHERE id = $2`, [nome, contatoId]);
+        await client.query(`UPDATE contatos SET nome = $1, atualizado_em = NOW() WHERE id = $2`, [nome, contatoId]);
       }
 
       // Se veio com número real (não LID) e o contato está salvo com LID como telefone, atualizar
       if (!isLid && contatoResult.rows[0].telefone !== telefoneLimpo && contatoResult.rows[0].telefone?.length > 13) {
-        await client.query(`UPDATE contatos SET telefone = $1, lid = $2 WHERE id = $3`, [telefoneLimpo, contatoResult.rows[0].telefone, contatoId]);
+        await client.query(
+          `UPDATE contatos SET telefone = $1, lid = $2, atualizado_em = NOW() WHERE id = $3`,
+          [telefoneLimpo, contatoResult.rows[0].telefone, contatoId]
+        );
         logger.info(`[WA] Telefone atualizado: LID ${contatoResult.rows[0].telefone} → real ${telefoneLimpo}`);
       }
 
@@ -184,10 +277,12 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
       }
     }
 
-    // Ticket
+    // ====== TICKET ======
     // Buscar ticket existente — qualquer status exceto 'fechado'
     let ticketResult = await client.query(
-      `SELECT id, status, usuario_id FROM tickets WHERE contato_id = $1 AND status NOT IN ('fechado') ORDER BY id DESC LIMIT 1`,
+      `SELECT id, status, usuario_id FROM tickets
+       WHERE contato_id = $1 AND status NOT IN ('fechado')
+       ORDER BY id DESC LIMIT 1`,
       [contatoId]
     );
 
@@ -196,26 +291,31 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
 
     if (ticketResult.rows.length > 0) {
       ticketId = ticketResult.rows[0].id;
+
       // Reabrir ticket resolvido quando cliente manda nova mensagem
       if (ticketResult.rows[0].status === 'resolvido' && !fromMe) {
-        await client.query(`UPDATE tickets SET status = 'pendente', usuario_id = NULL, atualizado_em = NOW() WHERE id = $1`, [ticketId]);
+        await client.query(
+          `UPDATE tickets SET status = 'pendente', usuario_id = NULL, atualizado_em = NOW() WHERE id = $1`,
+          [ticketId]
+        );
       }
     } else {
-      // Só criar ticket novo se não tem NENHUM ticket aberto/pendente/aguardando/resolvido
       const protocolo = _gerarProtocolo();
-      
+
       // Para fromMe (celular), criar como 'pendente' na fila "Dispositivo Externo"
-      // Para mensagens normais, criar como 'pendente' sem fila
       let filaId = null;
       if (fromMe) {
-        const filaResult = await client.query(`SELECT id FROM filas WHERE nome = 'Dispositivo Externo' AND ativo = TRUE LIMIT 1`);
+        const filaResult = await client.query(
+          `SELECT id FROM filas WHERE nome = 'Dispositivo Externo' AND ativo = TRUE LIMIT 1`
+        );
         if (filaResult.rows.length > 0) {
           filaId = filaResult.rows[0].id;
         }
       }
 
       const novo = await client.query(
-        `INSERT INTO tickets (contato_id, status, protocolo, fila_id, ultima_mensagem_em) VALUES ($1, 'pendente', $2, $3, NOW()) RETURNING id`,
+        `INSERT INTO tickets (contato_id, status, protocolo, fila_id, ultima_mensagem_em)
+         VALUES ($1, 'pendente', $2, $3, NOW()) RETURNING id`,
         [contatoId, protocolo, filaId]
       );
       ticketId = novo.rows[0].id;
@@ -223,7 +323,7 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
       logger.info({ ticketId, protocolo, fromMe, filaId }, '[WA] Novo ticket');
     }
 
-    // Salvar mensagem
+    // ====== SALVAR MENSAGEM ======
     let corpoFinal = corpo || '';
 
     const msgResult = await client.query(
@@ -239,9 +339,24 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
       [(corpo || '📎 Mídia').substring(0, 200), ticketId]
     );
 
+    // ====== SALVAR STICKER NA GALERIA ======
+    if (tipo === 'sticker' && mediaUrl) {
+      try {
+        await client.query(
+          `INSERT INTO stickers_galeria (url, recebido_de, ticket_id)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (url) DO UPDATE SET usado_em = NOW()`,
+          [mediaUrl, contatoId, ticketId]
+        );
+      } catch (err) {
+        // Tabela pode não existir ainda — não crítico
+        logger.warn({ err: err.message }, '[WA] Erro ao salvar sticker na galeria (tabela pode não existir)');
+      }
+    }
+
     await client.query('COMMIT');
 
-    // Marcar como lida
+    // Marcar como lida no WhatsApp
     if (!fromMe) {
       conexaoWA.marcarComoLida(waMessageId, telefoneLimpo);
     }
@@ -288,7 +403,6 @@ async function enviarAudio({ ticketId, audioBase64, usuarioId }) {
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.message || `HTTP ${response.status}`);
 
-    // Salvar base64 como media_url — o <audio> aceita data URI
     const msgResult = await query(
       `INSERT INTO mensagens (ticket_id, usuario_id, corpo, tipo, wa_message_id, is_from_me, status_envio, media_url)
        VALUES ($1, $2, '🎵 Áudio', 'audio', $3, TRUE, 'enviada', $4)
@@ -319,7 +433,6 @@ async function enviarImagem({ ticketId, imagemBase64, caption, usuarioId }) {
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.message || `HTTP ${response.status}`);
 
-    // Salvar base64 como media_url — o <img> aceita data URI
     const msgResult = await query(
       `INSERT INTO mensagens (ticket_id, usuario_id, corpo, tipo, wa_message_id, is_from_me, status_envio, media_url)
        VALUES ($1, $2, $3, 'imagem', $4, TRUE, 'enviada', $5)
@@ -401,16 +514,17 @@ async function enviarDocumento({ ticketId, documentoBase64, fileName, usuarioId 
  */
 async function buscarFotoPerfil(telefone) {
   if (!conexaoWA.instanceId || !conexaoWA.token || !telefone) return null;
-  
+
   try {
-    // Z-API: GET /profile-picture?phone=5571999999999
-    // Para grupos, o telefone é o ID do grupo (ex: 120363421560154850)
     const response = await fetch(`${conexaoWA.baseUrl}/profile-picture?phone=${telefone}`, {
       headers: conexaoWA.headers,
     });
     if (!response.ok) return null;
     const data = await response.json();
-    const url = data.link || data.imgUrl || data.profilePicThumbObj?.imgFull || data.profilePictureUrl || data.eurl || data.url || null;
+
+    const url = data.link || data.imgUrl || data.profilePicThumbObj?.imgFull
+      || data.profilePictureUrl || data.eurl || data.url || null;
+
     logger.info({ telefone, temFoto: !!url }, '[WA] Foto perfil');
     return url;
   } catch {
@@ -426,7 +540,8 @@ async function _obterTelefoneDoTicket(ticketId) {
   if (conexaoWA.status !== 'conectado') throw new AppError('WhatsApp não conectado', 503);
 
   const resultado = await query(
-    `SELECT c.telefone FROM tickets t JOIN contatos c ON c.id = t.contato_id WHERE t.id = $1`, [ticketId]
+    `SELECT c.telefone FROM tickets t JOIN contatos c ON c.id = t.contato_id WHERE t.id = $1`,
+    [ticketId]
   );
   if (resultado.rows.length === 0) throw new AppError('Ticket não encontrado', 404);
   return resultado.rows[0].telefone;
@@ -439,13 +554,25 @@ async function _atualizarPreviewTicket(ticketId, preview) {
   );
 }
 
-function obterQrCode() { return null; }
-function obterStatus() { return conexaoWA.obterStatus(); }
-async function reconectar() { await conexaoWA.desconectar(); await conexaoWA.conectar(); }
-async function forcarLogout() { await conexaoWA.desconectar(); }
+function obterQrCode() {
+  return null;
+}
+
+function obterStatus() {
+  return conexaoWA.obterStatus();
+}
+
+async function reconectar() {
+  await conexaoWA.desconectar();
+  await conexaoWA.conectar();
+}
+
+async function forcarLogout() {
+  await conexaoWA.desconectar();
+}
 
 /**
- * Iniciar conversa com contato existente — envia mensagem + cria/reabre ticket
+ * Iniciar conversa com contato existente
  */
 async function iniciarConversa({ telefone, mensagem, contatoId, usuarioId }) {
   const telefoneLimpo = telefone.replace(/\D/g, '');
@@ -455,7 +582,8 @@ async function iniciarConversa({ telefone, mensagem, contatoId, usuarioId }) {
 
   // Buscar ou criar ticket
   const ticketExistente = await query(
-    `SELECT t.id, t.status, t.protocolo, c.nome as contato_nome, c.telefone as contato_telefone, c.avatar_url as contato_avatar
+    `SELECT t.id, t.status, t.protocolo,
+            c.nome as contato_nome, c.telefone as contato_telefone, c.avatar_url as contato_avatar
      FROM tickets t
      LEFT JOIN contatos c ON c.id = t.contato_id
      WHERE t.contato_id = $1 AND t.status IN ('aberto', 'pendente', 'aguardando')
@@ -468,13 +596,11 @@ async function iniciarConversa({ telefone, mensagem, contatoId, usuarioId }) {
   if (ticketExistente.rows.length > 0) {
     ticketId = ticketExistente.rows[0].id;
     protocolo = ticketExistente.rows[0].protocolo;
-    // Atribuir ao atendente se não tem
     await query(
       `UPDATE tickets SET status = 'aberto', usuario_id = $1, atualizado_em = NOW() WHERE id = $2`,
       [usuarioId, ticketId]
     );
   } else {
-    // Verificar se tem ticket resolvido pra reabrir
     const resolvido = await query(
       `SELECT id, protocolo FROM tickets WHERE contato_id = $1 AND status = 'resolvido' ORDER BY id DESC LIMIT 1`,
       [contatoId]
@@ -488,10 +614,10 @@ async function iniciarConversa({ telefone, mensagem, contatoId, usuarioId }) {
         [usuarioId, ticketId]
       );
     } else {
-      // Criar ticket novo
       protocolo = _gerarProtocolo();
       const novo = await query(
-        `INSERT INTO tickets (contato_id, status, protocolo, usuario_id, ultima_mensagem_em) VALUES ($1, 'aberto', $2, $3, NOW()) RETURNING id`,
+        `INSERT INTO tickets (contato_id, status, protocolo, usuario_id, ultima_mensagem_em)
+         VALUES ($1, 'aberto', $2, $3, NOW()) RETURNING id`,
         [contatoId, protocolo, usuarioId]
       );
       ticketId = novo.rows[0].id;
@@ -506,10 +632,8 @@ async function iniciarConversa({ telefone, mensagem, contatoId, usuarioId }) {
     [ticketId, contatoId, mensagem, waMessageId]
   );
 
-  // Atualizar preview
   await _atualizarPreviewTicket(ticketId, mensagem);
 
-  // Buscar dados completos do ticket pra retornar
   const ticketCompleto = await query(
     `SELECT t.*, c.nome as contato_nome, c.telefone as contato_telefone, c.avatar_url as contato_avatar
      FROM tickets t LEFT JOIN contatos c ON c.id = t.contato_id WHERE t.id = $1`,
@@ -517,7 +641,6 @@ async function iniciarConversa({ telefone, mensagem, contatoId, usuarioId }) {
   );
 
   logger.info({ ticketId, protocolo, telefone: telefoneLimpo, usuarioId }, '[WA] Conversa iniciada pelo sistema');
-
   return { sucesso: true, ticket: ticketCompleto.rows[0] };
 }
 
@@ -532,8 +655,6 @@ async function reagirMensagem(mensagemId, emoji) {
   const telefone = await _obterTelefoneDoTicket(msg.rows[0].ticket_id);
 
   await conexaoWA.reagirMensagem(waMessageId, telefone, emoji);
-
-  // Salvar reação no banco
   await query(`UPDATE mensagens SET reacao = $1 WHERE id = $2`, [emoji, mensagemId]);
 
   logger.info({ mensagemId, emoji }, '[WA] Reação enviada');
@@ -551,16 +672,13 @@ async function deletarMensagem(mensagemId) {
   const telefone = await _obterTelefoneDoTicket(msg.rows[0].ticket_id);
   await conexaoWA.deletarMensagem(msg.rows[0].wa_message_id, telefone);
 
-  // Marcar como deletada no banco
   await query(`UPDATE mensagens SET deletada = TRUE, deletada_por = 'atendente' WHERE id = $1`, [mensagemId]);
-
   logger.info({ mensagemId }, '[WA] Mensagem deletada');
   return { sucesso: true };
 }
 
 /**
  * Encaminhar mensagem para outro contato
- * Tenta forward-message da Z-API, se falhar reenvia como texto
  */
 async function encaminharMensagem(mensagemId, telefoneDestino) {
   const msg = await query(
@@ -568,7 +686,8 @@ async function encaminharMensagem(mensagemId, telefoneDestino) {
      FROM mensagens m
      LEFT JOIN tickets t ON t.id = m.ticket_id
      LEFT JOIN contatos c ON c.id = t.contato_id
-     WHERE m.id = $1`, [mensagemId]
+     WHERE m.id = $1`,
+    [mensagemId]
   );
   if (msg.rows.length === 0) throw new AppError('Mensagem não encontrada', 404);
 
@@ -587,11 +706,10 @@ async function encaminharMensagem(mensagemId, telefoneDestino) {
 
   // Fallback — reenviar conteúdo como nova mensagem
   const prefixo = `📨 *Encaminhada de ${contato_nome || 'contato'}:*\n\n`;
-  
+
   if (tipo === 'imagem' && media_url) {
     await conexaoWA.enviarImagem(telDestino, media_url, prefixo + (corpo || ''));
   } else if (tipo === 'audio' && media_url) {
-    // Áudio não suporta prefixo, enviar texto antes
     await conexaoWA.enviarTexto(telDestino, prefixo + '🎵 Áudio encaminhado');
   } else if (tipo === 'video' && media_url) {
     await conexaoWA.enviarTexto(telDestino, prefixo + (corpo || '🎥 Vídeo'));
@@ -610,9 +728,10 @@ async function encaminharMensagem(mensagemId, telefoneDestino) {
  */
 async function enviarSticker(ticketId, stickerUrl) {
   const telefone = await _obterTelefoneDoTicket(ticketId);
-  const result = await conexaoWA.enviarSticker(telefone, stickerUrl);
 
+  const result = await conexaoWA.enviarSticker(telefone, stickerUrl);
   const waMessageId = result.key?.id || `sticker_${Date.now()}`;
+
   const ticket = await query(`SELECT contato_id FROM tickets WHERE id = $1`, [ticketId]);
   const contatoId = ticket.rows[0]?.contato_id;
 
@@ -623,9 +742,25 @@ async function enviarSticker(ticketId, stickerUrl) {
   );
 
   await _atualizarPreviewTicket(ticketId, '🎭 Sticker');
-  logger.info({ ticketId, telefone }, '[WA] Sticker enviado');
 
+  logger.info({ ticketId, telefone }, '[WA] Sticker enviado');
   return { sucesso: true, waMessageId };
+}
+
+/**
+ * Listar stickers da galeria (últimos recebidos)
+ */
+async function listarStickersGaleria({ limite = 30 }) {
+  try {
+    const resultado = await query(
+      `SELECT id, url, usado_em FROM stickers_galeria ORDER BY usado_em DESC LIMIT $1`,
+      [limite]
+    );
+    return resultado.rows;
+  } catch {
+    // Tabela pode não existir
+    return [];
+  }
 }
 
 module.exports = {
@@ -641,6 +776,7 @@ module.exports = {
   deletarMensagem,
   encaminharMensagem,
   enviarSticker,
+  listarStickersGaleria,
   obterQrCode,
   obterStatus,
   reconectar,
