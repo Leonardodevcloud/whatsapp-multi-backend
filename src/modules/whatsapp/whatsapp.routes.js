@@ -1,5 +1,5 @@
 // src/modules/whatsapp/whatsapp.routes.js
-// Rotas WhatsApp — Z-API + Webhook (CORRIGIDO)
+// Rotas WhatsApp — Z-API + Webhook (CORRIGIDO — revoke pago + stickers galeria)
 
 const { Router } = require('express');
 const whatsappService = require('./whatsapp.service');
@@ -28,11 +28,13 @@ router.post('/enviar', verificarToken, limiteSensivel, async (req, res, next) =>
     if (!ticket_id || !texto?.trim()) {
       return res.status(400).json({ erro: 'ticket_id e texto são obrigatórios' });
     }
+
     const mensagem = await whatsappService.enviarMensagemTexto({
       ticketId: ticket_id,
       texto: texto.trim(),
       usuarioId: req.usuario.id,
     });
+
     res.json({ sucesso: true, mensagem });
   } catch (err) {
     next(err);
@@ -44,9 +46,12 @@ router.post('/enviar-audio', verificarToken, limiteSensivel, async (req, res, ne
   try {
     const { ticket_id, audio_base64 } = req.body;
     if (!ticket_id || !audio_base64) return res.status(400).json({ erro: 'ticket_id e audio_base64 são obrigatórios' });
+
     const mensagem = await whatsappService.enviarAudio({ ticketId: ticket_id, audioBase64: audio_base64, usuarioId: req.usuario.id });
     res.json({ sucesso: true, mensagem });
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 });
 
 // POST /api/whatsapp/enviar-imagem
@@ -54,9 +59,12 @@ router.post('/enviar-imagem', verificarToken, limiteSensivel, async (req, res, n
   try {
     const { ticket_id, imagem_base64, caption } = req.body;
     if (!ticket_id || !imagem_base64) return res.status(400).json({ erro: 'ticket_id e imagem_base64 são obrigatórios' });
+
     const mensagem = await whatsappService.enviarImagem({ ticketId: ticket_id, imagemBase64: imagem_base64, caption, usuarioId: req.usuario.id });
     res.json({ sucesso: true, mensagem });
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 });
 
 // POST /api/whatsapp/enviar-video
@@ -64,9 +72,12 @@ router.post('/enviar-video', verificarToken, limiteSensivel, async (req, res, ne
   try {
     const { ticket_id, video_base64, caption } = req.body;
     if (!ticket_id || !video_base64) return res.status(400).json({ erro: 'ticket_id e video_base64 são obrigatórios' });
+
     const mensagem = await whatsappService.enviarVideo({ ticketId: ticket_id, videoBase64: video_base64, caption, usuarioId: req.usuario.id });
     res.json({ sucesso: true, mensagem });
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 });
 
 // POST /api/whatsapp/enviar-documento
@@ -74,9 +85,12 @@ router.post('/enviar-documento', verificarToken, limiteSensivel, async (req, res
   try {
     const { ticket_id, documento_base64, file_name } = req.body;
     if (!ticket_id || !documento_base64) return res.status(400).json({ erro: 'ticket_id e documento_base64 são obrigatórios' });
+
     const mensagem = await whatsappService.enviarDocumento({ ticketId: ticket_id, documentoBase64: documento_base64, fileName: file_name, usuarioId: req.usuario.id });
     res.json({ sucesso: true, mensagem });
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 });
 
 // GET /api/whatsapp/foto-perfil/:telefone
@@ -85,12 +99,11 @@ router.get('/foto-perfil/:telefone', verificarToken, async (req, res) => {
   res.json({ url });
 });
 
-// POST /api/whatsapp/atualizar-fotos — busca foto de perfil de todos os contatos e grupos sem avatar
+// POST /api/whatsapp/atualizar-fotos — busca foto de perfil de todos os contatos sem avatar
 router.post('/atualizar-fotos', verificarToken, verificarAdmin, async (req, res) => {
   const { query: dbQuery } = require('../../config/database');
   const contatos = await dbQuery(`SELECT id, telefone FROM contatos WHERE avatar_url IS NULL LIMIT 50`);
   let atualizados = 0;
-
   for (const contato of contatos.rows) {
     try {
       const url = await whatsappService.buscarFotoPerfil(contato.telefone);
@@ -101,56 +114,79 @@ router.post('/atualizar-fotos', verificarToken, verificarAdmin, async (req, res)
       await new Promise(r => setTimeout(r, 500));
     } catch { /* ignorar */ }
   }
-
   res.json({ sucesso: true, total: contatos.rows.length, atualizados });
 });
 
-// POST /api/whatsapp/iniciar-conversa — iniciar conversa com contato existente
+// POST /api/whatsapp/iniciar-conversa
 router.post('/iniciar-conversa', verificarToken, async (req, res, next) => {
   try {
     const { telefone, mensagem, contato_id } = req.body;
     if (!telefone || !mensagem) return res.status(400).json({ erro: 'telefone e mensagem são obrigatórios' });
+
     const resultado = await whatsappService.iniciarConversa({ telefone, mensagem, contatoId: contato_id, usuarioId: req.usuario.id });
     res.json(resultado);
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 });
 
-// POST /api/whatsapp/reagir — reagir a mensagem
+// POST /api/whatsapp/reagir
 router.post('/reagir', verificarToken, async (req, res, next) => {
   try {
     const { mensagem_id, emoji } = req.body;
     if (!mensagem_id || !emoji) return res.status(400).json({ erro: 'mensagem_id e emoji são obrigatórios' });
+
     const resultado = await whatsappService.reagirMensagem(mensagem_id, emoji);
     res.json(resultado);
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 });
 
-// DELETE /api/whatsapp/deletar-mensagem/:id — deletar mensagem
+// DELETE /api/whatsapp/deletar-mensagem/:id
 router.delete('/deletar-mensagem/:id', verificarToken, async (req, res, next) => {
   try {
     const resultado = await whatsappService.deletarMensagem(req.params.id);
     res.json(resultado);
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 });
 
-// POST /api/whatsapp/encaminhar — encaminhar mensagem para outro contato
+// POST /api/whatsapp/encaminhar
 router.post('/encaminhar', verificarToken, async (req, res, next) => {
   try {
     const { mensagem_id, telefone_destino } = req.body;
     if (!mensagem_id || !telefone_destino) return res.status(400).json({ erro: 'mensagem_id e telefone_destino são obrigatórios' });
+
     const resultado = await whatsappService.encaminharMensagem(mensagem_id, telefone_destino);
     res.json(resultado);
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 });
 
-// POST /api/whatsapp/enviar-sticker — enviar sticker
+// POST /api/whatsapp/enviar-sticker
 router.post('/enviar-sticker', verificarToken, async (req, res, next) => {
   try {
     const { ticketId, stickerUrl } = req.body;
     if (!ticketId || !stickerUrl) return res.status(400).json({ erro: 'ticketId e stickerUrl são obrigatórios' });
+
     const resultado = await whatsappService.enviarSticker(ticketId, stickerUrl);
     res.json(resultado);
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/whatsapp/stickers-galeria — listar stickers recebidos
+router.get('/stickers-galeria', verificarToken, async (req, res, next) => {
+  try {
+    const stickers = await whatsappService.listarStickersGaleria({ limite: parseInt(req.query.limite) || 30 });
+    res.json({ stickers });
+  } catch (err) {
+    next(err);
+  }
 });
 
 // POST /api/whatsapp/reconectar
@@ -158,7 +194,9 @@ router.post('/reconectar', verificarToken, verificarAdmin, async (req, res, next
   try {
     await whatsappService.reconectar();
     res.json({ sucesso: true, status: whatsappService.obterStatus() });
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 });
 
 // POST /api/whatsapp/logout
@@ -166,11 +204,14 @@ router.post('/logout', verificarToken, verificarAdmin, async (req, res, next) =>
   try {
     await whatsappService.forcarLogout();
     res.json({ sucesso: true });
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 });
 
 // ============================================================
 // WEBHOOK Z-API — recebe TUDO (mensagens, status, conexão)
+// MELHORADO: revoke robusto para plano pago Z-API
 // ============================================================
 router.post('/webhook', async (req, res) => {
   res.status(200).json({ status: 'ok' });
@@ -180,7 +221,19 @@ router.post('/webhook', async (req, res) => {
     if (!body) return;
 
     // Log completo pra debug
-    logger.info({ tipo: body.type || body.status || 'desconhecido', phone: body.phone, fromMe: body.fromMe, hasText: !!body.text, hasImage: !!body.image, hasAudio: !!body.audio, isRevoked: body.isRevoked, isReaction: body.isReaction, isEdit: body.isEdit }, '[Webhook] Payload recebido');
+    logger.info({
+      tipo: body.type || body.status || 'desconhecido',
+      phone: body.phone,
+      fromMe: body.fromMe,
+      hasText: !!body.text,
+      hasImage: !!body.image,
+      hasAudio: !!body.audio,
+      hasSticker: !!body.sticker,
+      isRevoked: body.isRevoked,
+      isReaction: body.isReaction,
+      isEdit: body.isEdit,
+      waitingMessage: body.waitingMessage,
+    }, '[Webhook] Payload recebido');
 
     // ---- CONEXÃO/DESCONEXÃO ----
     if (body.connected !== undefined) {
@@ -203,10 +256,7 @@ router.post('/webhook', async (req, res) => {
       const act = body.act || body.presence || body.type;
       if (phone) {
         const telefoneLimpo = String(phone).replace('@c.us', '').replace('@s.whatsapp.net', '').replace(/\D/g, '');
-        broadcast('contato:digitando', {
-          telefone: telefoneLimpo,
-          acao: act,
-        });
+        broadcast('contato:digitando', { telefone: telefoneLimpo, acao: act });
       }
       return;
     }
@@ -244,19 +294,48 @@ router.post('/webhook', async (req, res) => {
       return;
     }
 
-    // ---- MENSAGEM APAGADA (REVOKED) ----
-    // Z-API pode mandar como: type=revoked, isRevoked=true, type=delete, ou waitingMessage=true
-    if (body.type === 'revoked' || body.isRevoked || body.type === 'delete' || body.waitingMessage) {
-      const msgId = body.messageId || body.id?.id || body.referenceMessageId || body.ids?.[0]?.id;
-      logger.info({ msgId, type: body.type, isRevoked: body.isRevoked, waitingMessage: body.waitingMessage, bodyKeys: Object.keys(body) }, '[Webhook] Evento de mensagem apagada');
+    // ============================================================
+    // MENSAGEM APAGADA (REVOKED) — suporte completo Z-API pago
+    // Z-API pode mandar como:
+    //   - type=revoked
+    //   - isRevoked=true
+    //   - type=delete
+    //   - waitingMessage=true (mensagem auto-destruição)
+    //   - type=protocolMessage com subtype=REVOKE
+    //   - body.protocolMessage?.type === 0 (REVOKE no protocolo interno)
+    // ============================================================
+    const isRevokeEvent = (
+      body.type === 'revoked' ||
+      body.isRevoked === true ||
+      body.type === 'delete' ||
+      (body.waitingMessage === true && !body.text && !body.image && !body.audio && !body.video && !body.document && !body.sticker) ||
+      body.type === 'protocolMessage' ||
+      (body.protocolMessage && body.protocolMessage.type === 0)
+    );
+
+    if (isRevokeEvent && !body.phone) {
+      // Revoke SEM phone (evento global)
+      const msgId = body.messageId || body.id?.id || body.referenceMessageId || body.ids?.[0]?.id
+        || body.protocolMessage?.key?.id;
+
+      logger.info({
+        msgId,
+        type: body.type,
+        isRevoked: body.isRevoked,
+        waitingMessage: body.waitingMessage,
+        hasProtocolMessage: !!body.protocolMessage,
+        bodyKeys: Object.keys(body),
+      }, '[Webhook] Evento de mensagem apagada (sem phone)');
+
       if (msgId) {
         const { query: dbQuery } = require('../../config/database');
         const result = await dbQuery(
-          `UPDATE mensagens SET deletada = TRUE, deletada_por = 'contato' WHERE wa_message_id = $1 AND deletada = FALSE RETURNING id`,
+          `UPDATE mensagens SET deletada = TRUE, deletada_por = 'contato'
+           WHERE wa_message_id = $1 AND deletada = FALSE RETURNING id, ticket_id`,
           [msgId]
         );
         if (result.rows.length > 0) {
-          broadcast('mensagem:deletada', { mensagemId: result.rows[0].id });
+          broadcast('mensagem:deletada', { mensagemId: result.rows[0].id, ticketId: result.rows[0].ticket_id });
           logger.info({ msgId, dbId: result.rows[0].id }, '[Webhook] Mensagem marcada como apagada');
         }
       }
@@ -265,26 +344,49 @@ router.post('/webhook', async (req, res) => {
 
     // ---- MENSAGEM (texto, mídia, localização, contato, sticker) ----
     if (body.phone) {
-      // Limpar telefone — manter @lid e @g.us como identificadores
+      // Limpar telefone
       let telefoneRaw = String(body.phone);
       let telefone = telefoneRaw.replace('@c.us', '').replace('@s.whatsapp.net', '').replace('@g.us', '').replace('@lid', '').replace(/\D/g, '');
-      
+
       const isGroup = body.isGroup || false;
       const fromMe = body.fromMe || false;
 
       // ---- MENSAGEM APAGADA COM PHONE (revoke pode vir junto com phone) ----
-      if (body.waitingMessage === true || body.isRevoked === true || body.type === 'revoked') {
-        const msgId = body.messageId || body.id?.id || body.referenceMessageId;
-        logger.info({ msgId, telefone, waitingMessage: body.waitingMessage, isRevoked: body.isRevoked, type: body.type }, '[Webhook] Mensagem apagada (dentro de phone)');
+      const isRevokeComPhone = (
+        body.waitingMessage === true ||
+        body.isRevoked === true ||
+        body.type === 'revoked' ||
+        body.type === 'delete' ||
+        body.type === 'protocolMessage' ||
+        (body.protocolMessage && body.protocolMessage.type === 0)
+      );
+
+      // Só tratar como revoke se NÃO tem conteúdo de mensagem real
+      const temConteudoReal = body.text || body.image || body.audio || body.video || body.document || body.sticker || body.location || body.contactMessage || body.contact;
+
+      if (isRevokeComPhone && !temConteudoReal) {
+        const msgId = body.messageId || body.id?.id || body.referenceMessageId
+          || body.protocolMessage?.key?.id || body.ids?.[0]?.id;
+
+        logger.info({
+          msgId,
+          telefone,
+          waitingMessage: body.waitingMessage,
+          isRevoked: body.isRevoked,
+          type: body.type,
+          hasProtocolMessage: !!body.protocolMessage,
+        }, '[Webhook] Mensagem apagada (com phone)');
+
         if (msgId) {
           const { query: dbQuery } = require('../../config/database');
           const result = await dbQuery(
-            `UPDATE mensagens SET deletada = TRUE, deletada_por = 'contato' WHERE wa_message_id = $1 AND deletada = FALSE RETURNING id`,
-            [msgId]
+            `UPDATE mensagens SET deletada = TRUE, deletada_por = $1
+             WHERE wa_message_id = $2 AND deletada = FALSE RETURNING id, ticket_id`,
+            [fromMe ? 'atendente' : 'contato', msgId]
           );
           if (result.rows.length > 0) {
-            broadcast('mensagem:deletada', { mensagemId: result.rows[0].id });
-            logger.info({ msgId, dbId: result.rows[0].id }, '[Webhook] Mensagem marcada como apagada');
+            broadcast('mensagem:deletada', { mensagemId: result.rows[0].id, ticketId: result.rows[0].ticket_id });
+            logger.info({ msgId, dbId: result.rows[0].id, deletadaPor: fromMe ? 'atendente' : 'contato' }, '[Webhook] Mensagem marcada como apagada');
           }
         }
         return;
@@ -293,52 +395,35 @@ router.post('/webhook', async (req, res) => {
       // DEBUG: Quando fromMe, logar campos pra encontrar telefone real
       if (fromMe) {
         logger.info({
-          phone: body.phone,
-          chatId: body.chatId,
-          chat: body.chat,
-          from: body.from,
-          to: body.to,
-          participant: body.participant,
-          senderPhone: body.senderPhone,
-          chatPhone: body.chatPhone,
-          momment: body.momment,
-          chatName: body.chatName,
-          senderName: body.senderName,
+          phone: body.phone, chatId: body.chatId, chat: body.chat,
+          from: body.from, to: body.to, participant: body.participant,
+          senderPhone: body.senderPhone, chatPhone: body.chatPhone,
+          chatName: body.chatName, senderName: body.senderName,
           connectedPhone: body.connectedPhone,
         }, '[Webhook] fromMe DEBUG — campos disponíveis');
       }
 
-      // Para 1:1: se telefone é muito longo E não é grupo, pode ser lid — não descartar, usar como ID
-      // A Z-API manda @lid pra contatos vinculados — tratar normalmente
-
       // Nome do contato/grupo
       let nome;
       let nomeParticipante = null;
-
       if (isGroup) {
-        // Grupo: chatName é o nome do grupo
         nome = body.chatName || body.groupName || `Grupo ${telefone}`;
-        // Participante: quem mandou a mensagem dentro do grupo
         nomeParticipante = body.senderName || body.pushName || body.participantName || 'Participante';
       } else {
-        // 1:1: priorizar chatName (agenda), depois senderName, depois pushName
         nome = body.chatName || body.senderName || body.pushName || body.name || telefone;
       }
 
-      // Log detalhado pra debug
       logger.info(`[Webhook] tel=${telefone} fromMe=${fromMe} isGroup=${isGroup} nome=${nome}`);
 
-      // messageId — Z-API manda em vários campos possíveis
+      // messageId
       const waMessageId = body.messageId || body.id?.id || body.zapiMessageId || body.id?._serialized || body.ids?.[0]?.id;
 
+      let waMessageIdFinal;
       if (!waMessageId) {
-        // Gerar um ID único baseado no timestamp pra não perder a mensagem
-        const fallbackId = `zapi_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-        logger.warn({ bodyKeys: Object.keys(body), phone: telefone, isGroup, text: typeof body.text }, '[Webhook] Sem messageId — usando fallback');
-        // Usar fallback ID pra não descartar a mensagem
-        var waMessageIdFinal = fallbackId;
+        waMessageIdFinal = `zapi_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        logger.warn({ bodyKeys: Object.keys(body), phone: telefone, isGroup }, '[Webhook] Sem messageId — usando fallback');
       } else {
-        var waMessageIdFinal = waMessageId;
+        waMessageIdFinal = waMessageId;
       }
 
       // Detectar tipo e corpo da mensagem
@@ -365,7 +450,7 @@ router.post('/webhook', async (req, res) => {
       } else if (body.sticker) {
         tipo = 'sticker';
         corpo = '🎭 Sticker';
-        mediaUrl = body.sticker.stickerUrl || body.sticker.url || null;
+        mediaUrl = body.sticker.stickerUrl || body.sticker.url || body.sticker.pngUrl || null;
       } else if (body.location) {
         tipo = 'localizacao';
         corpo = `📍 ${body.location.latitude || ''}, ${body.location.longitude || ''}`;
@@ -384,7 +469,7 @@ router.post('/webhook', async (req, res) => {
         corpo = body.buttonsResponseMessage.selectedButtonId || body.buttonsResponseMessage.selectedDisplayText || '';
       }
 
-      // Se não conseguiu extrair nada, logar detalhes pra debug
+      // Se não conseguiu extrair nada, logar detalhes
       if (!corpo && !mediaUrl) {
         logger.warn({
           bodyKeys: Object.keys(body),
@@ -394,8 +479,6 @@ router.post('/webhook', async (req, res) => {
           isRevoked: body.isRevoked,
           isEdit: body.isEdit,
           type: body.type,
-          isNotification: body.isNotification,
-          status: body.status,
           fromMe: body.fromMe,
         }, '[Webhook] Mensagem sem corpo detectável');
         return;
@@ -403,15 +486,8 @@ router.post('/webhook', async (req, res) => {
 
       // Processar
       const resultado = await whatsappService.processarMensagemRecebida({
-        telefone,
-        nome,
-        corpo,
-        tipo,
-        waMessageId: waMessageIdFinal,
-        isGroup,
-        fromMe,
-        mediaUrl,
-        nomeParticipante,
+        telefone, nome, corpo, tipo, waMessageId: waMessageIdFinal,
+        isGroup, fromMe, mediaUrl, nomeParticipante,
       });
 
       if (resultado) {
