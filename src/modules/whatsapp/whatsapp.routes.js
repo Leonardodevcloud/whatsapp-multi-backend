@@ -416,19 +416,50 @@ router.post('/webhook', async (req, res) => {
       let nomeParticipante = null;
       if (isGroup) {
         nome = body.chatName || body.groupName || `Grupo ${telefone}`;
-        // Nome do participante — Z-API envia de várias formas
-        nomeParticipante = body.senderName || body.pushName || body.participantName || body.notifyName || 'Participante';
 
-        // Log extra pra debug de grupos
+        // Nome do participante — Z-API envia senderName como nome do perfil WhatsApp
+        // Mas queremos o nome SALVO NA BASE DE CONTATOS (importados)
+        let nomeDoZapi = body.senderName || body.pushName || body.participantName || body.notifyName || null;
+
+        // Tentar buscar nome real na base de contatos pelo participantPhone ou participantLid
+        const partPhone = body.participantPhone ? String(body.participantPhone).replace(/\D/g, '') : null;
+        const partLid = body.participantLid ? String(body.participantLid).replace('@lid', '').replace(/\D/g, '') : null;
+
+        if (partPhone || partLid) {
+          try {
+            const { query: dbQuery } = require('../../config/database');
+            let contatoParticipante = null;
+
+            // Buscar por telefone primeiro
+            if (partPhone) {
+              const r = await dbQuery(`SELECT nome FROM contatos WHERE telefone = $1 LIMIT 1`, [partPhone]);
+              if (r.rows.length > 0) contatoParticipante = r.rows[0].nome;
+            }
+
+            // Se não achou, buscar por lid
+            if (!contatoParticipante && partLid) {
+              const r = await dbQuery(`SELECT nome FROM contatos WHERE lid = $1 LIMIT 1`, [partLid]);
+              if (r.rows.length > 0) contatoParticipante = r.rows[0].nome;
+            }
+
+            if (contatoParticipante) {
+              nomeDoZapi = contatoParticipante;
+              logger.info(`[Webhook] Participante encontrado na base: ${partPhone || partLid} → ${contatoParticipante}`);
+            }
+          } catch { /* não crítico */ }
+        }
+
+        nomeParticipante = nomeDoZapi || 'Participante';
+
+        // Log debug
         logger.info({
           chatName: body.chatName,
           senderName: body.senderName,
           pushName: body.pushName,
-          participantName: body.participantName,
-          participant: body.participant,
-          senderPhone: body.senderPhone,
-          mentionedList: body.mentionedList || null,
-        }, '[Webhook] Grupo DEBUG — participante');
+          participantPhone: body.participantPhone,
+          participantLid: body.participantLid,
+          nomeResolvido: nomeParticipante,
+        }, '[Webhook] Grupo — participante');
       } else {
         nome = body.chatName || body.senderName || body.pushName || body.name || telefone;
       }
