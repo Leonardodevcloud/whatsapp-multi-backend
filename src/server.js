@@ -1,5 +1,6 @@
 // src/server.js
 // Orquestrador — sem lógica de negócio
+// ADICIONADO: Cron job pra mapear LIDs automaticamente
 
 const http = require('http');
 const express = require('express');
@@ -176,10 +177,64 @@ async function iniciar() {
     } catch (err) {
       logger.error({ err: err.message }, '[Server] WhatsApp falhou — servidor continua rodando');
     }
+
+    // 8. Iniciar cron jobs
+    _iniciarCronJobs();
+
   } catch (err) {
     logger.error({ err }, '[Server] Falha na inicialização');
     process.exit(1);
   }
+}
+
+// ============================================================
+// CRON JOBS
+// ============================================================
+
+function _iniciarCronJobs() {
+  // ---- Mapear LIDs de contatos novos ----
+  // Fase 1: A cada 5 minutos com batch de 200, até mapear TUDO
+  // Fase 2: Quando acabar, muda pra a cada 6 horas (manutenção)
+  const INTERVALO_RAPIDO = 5 * 60 * 1000;    // 5 minutos
+  const INTERVALO_MANUTENCAO = 6 * 60 * 60 * 1000; // 6 horas
+  let intervaloAtual = null;
+  let totalMapeadoGlobal = 0;
+
+  async function executarMapeamento() {
+    try {
+      const whatsappService = require('./modules/whatsapp/whatsapp.service');
+      const resultado = await whatsappService.mapearLidsContatos({ limite: 200 });
+      totalMapeadoGlobal += resultado.mapeados;
+
+      logger.info({
+        batch: resultado.mapeados,
+        erros: resultado.erros,
+        restantes: resultado.total - resultado.mapeados,
+        totalGlobal: totalMapeadoGlobal,
+      }, '[Cron] Mapeamento de LIDs');
+
+      // Se não tem mais contatos pra mapear, mudar pra intervalo de manutenção
+      if (resultado.total === 0) {
+        logger.info(`[Cron] ✅ Todos os LIDs mapeados! Total: ${totalMapeadoGlobal}. Mudando pra modo manutenção (6h).`);
+
+        if (intervaloAtual) clearInterval(intervaloAtual);
+        intervaloAtual = setInterval(executarMapeamento, INTERVALO_MANUTENCAO);
+      }
+    } catch (err) {
+      logger.error({ err: err.message }, '[Cron] Erro no mapeamento de LIDs');
+    }
+  }
+
+  // Primeira execução 2 minutos após o boot
+  setTimeout(() => {
+    logger.info('[Cron] Iniciando mapeamento rápido de LIDs (a cada 5 min)...');
+    executarMapeamento();
+
+    // Depois repete a cada 5 minutos até acabar
+    intervaloAtual = setInterval(executarMapeamento, INTERVALO_RAPIDO);
+  }, 2 * 60 * 1000);
+
+  logger.info('[Server] Cron jobs iniciados (mapear LIDs: 2min após boot, depois a cada 5min até acabar)');
 }
 
 /**
