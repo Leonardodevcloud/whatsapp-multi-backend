@@ -349,6 +349,11 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
     // ============================================================
     let corpoFinal = corpo || '';
 
+    // Resolver menções @lid no texto (grupos: quando alguém marca outra pessoa)
+    if (isGroup && corpoFinal && corpoFinal.includes('@')) {
+      corpoFinal = await _resolverMencoesLid(client, corpoFinal);
+    }
+
     const msgResult = await client.query(
       `INSERT INTO mensagens (ticket_id, contato_id, corpo, tipo, wa_message_id, is_from_me, status_envio, media_url, nome_participante)
        VALUES ($1, $2, $3, $4, $5, $6, 'entregue', $7, $8)
@@ -536,7 +541,13 @@ async function _obterDestinoDoTicket(ticketId) {
   if (resultado.rows.length === 0) throw new AppError('Ticket não encontrado', 404);
 
   const { telefone, lid } = resultado.rows[0];
-  // Priorizar lid pra envio (mais estável)
+
+  // Pra GRUPOS: usar telefone raw (ID do grupo), NUNCA lid
+  // Grupos têm telefone com 15+ dígitos (ex: 120363421560154850)
+  const isGroupPhone = telefone && telefone.length > 15;
+  if (isGroupPhone) return telefone;
+
+  // Pra 1:1: priorizar lid (mais estável segundo Z-API)
   return lid ? `${lid}@lid` : telefone;
 }
 
@@ -545,6 +556,35 @@ async function _atualizarPreviewTicket(ticketId, preview) {
     `UPDATE tickets SET ultima_mensagem_em = NOW(), ultima_mensagem_preview = $1, atualizado_em = NOW() WHERE id = $2`,
     [preview.substring(0, 200), ticketId]
   );
+}
+
+/**
+ * Resolver menções @lid no texto de mensagens de grupo.
+ * Substitui padrões como @1243243424 (que são LIDs) pelo nome do contato se encontrado.
+ */
+async function _resolverMencoesLid(client, texto) {
+  // Regex: captura @ seguido de 10+ dígitos (LIDs típicos)
+  const mencoes = texto.match(/@(\d{10,})/g);
+  if (!mencoes || mencoes.length === 0) return texto;
+
+  let textoResolvido = texto;
+
+  for (const mencao of mencoes) {
+    const lidNumero = mencao.replace('@', '');
+
+    // Buscar contato por lid ou telefone
+    const contato = await client.query(
+      `SELECT nome FROM contatos WHERE lid = $1 OR telefone = $1 LIMIT 1`,
+      [lidNumero]
+    );
+
+    if (contato.rows.length > 0 && contato.rows[0].nome) {
+      // Substituir @lid pelo @nome
+      textoResolvido = textoResolvido.replace(mencao, `@${contato.rows[0].nome}`);
+    }
+  }
+
+  return textoResolvido;
 }
 
 function obterQrCode() { return null; }
