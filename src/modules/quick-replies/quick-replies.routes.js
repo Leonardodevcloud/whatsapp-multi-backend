@@ -1,4 +1,5 @@
 // src/modules/quick-replies/quick-replies.routes.js
+// CORRIGIDO: passar media_tipo no POST
 const { Router } = require('express');
 const service = require('./quick-replies.service');
 const { verificarToken } = require('../../middleware/auth');
@@ -15,9 +16,9 @@ router.get('/', verificarToken, async (req, res, next) => {
 
 router.post('/', verificarToken, async (req, res, next) => {
   try {
-    const { atalho, titulo, corpo, media_url, fila_id } = req.body;
+    const { atalho, titulo, corpo, media_url, media_tipo, fila_id } = req.body;
     const resposta = await service.criarRespostaRapida({
-      atalho, titulo, corpo, mediaUrl: media_url, filaId: fila_id, usuarioId: req.usuario.id,
+      atalho, titulo, corpo, mediaUrl: media_url, mediaTipo: media_tipo, filaId: fila_id, usuarioId: req.usuario.id,
     });
     res.status(201).json(resposta);
   } catch (err) { next(err); }
