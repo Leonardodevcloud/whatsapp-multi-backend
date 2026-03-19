@@ -189,6 +189,18 @@ router.get('/stickers-galeria', verificarToken, async (req, res, next) => {
   }
 });
 
+// POST /api/whatsapp/mapear-lids — mapear LIDs de contatos via Z-API phone-exists
+// Chama phone-exists pra cada contato sem lid (rate limited: 1/segundo)
+router.post('/mapear-lids', verificarToken, verificarAdmin, async (req, res, next) => {
+  try {
+    const limite = parseInt(req.query.limite) || parseInt(req.body.limite) || 50;
+    const resultado = await whatsappService.mapearLidsContatos({ limite });
+    res.json(resultado);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // POST /api/whatsapp/reconectar
 router.post('/reconectar', verificarToken, verificarAdmin, async (req, res, next) => {
   try {
