@@ -99,7 +99,7 @@ async function _calcularTempoRespostaSeNecessario(ticketId) {
  *     Se encontra, UNIFICA: atualiza telefone para o real, preserva lid.
  *     Também migra tickets do contato LID duplicado se houver.
  */
-async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessageId, isGroup, fromMe, mediaUrl, nomeParticipante }) {
+async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessageId, isGroup, fromMe, mediaUrl, nomeParticipante, isLidRaw }) {
   const client = await getClient();
 
   try {
@@ -114,10 +114,15 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
 
     const telefoneLimpo = telefone.replace('@c.us', '').replace('@lid', '').replace('@s.whatsapp.net', '').replace(/\D/g, '');
 
-    // Detectar se é LID (telefone com mais de 13 dígitos e não é grupo)
-    const isLid = telefoneLimpo.length > 13 && !isGroup;
+    // Detectar se é LID:
+    // 1. Flag isLidRaw (webhook veio com @lid no raw phone) — MAIS CONFIÁVEL
+    // 2. Fallback: telefone com mais de 13 dígitos e não é grupo
+    // 3. Fallback: telefone não começa com 55 (Brasil) e tem 12+ dígitos
+    const isLid = (isLidRaw === true) ||
+      (telefoneLimpo.length > 13 && !isGroup) ||
+      (telefoneLimpo.length >= 12 && !telefoneLimpo.startsWith('55') && !isGroup);
 
-    logger.info(`[WA] Buscando contato tel=${telefoneLimpo} (raw=${telefone}) fromMe=${fromMe} isLid=${isLid} nome=${nome}`);
+    logger.info(`[WA] Buscando contato tel=${telefoneLimpo} (raw=${telefone}) fromMe=${fromMe} isLid=${isLid} isLidRaw=${isLidRaw} nome=${nome}`);
 
     let contatoResult;
 
