@@ -104,9 +104,14 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
     const telefoneLimpo = telefone.replace('@c.us', '').replace('@lid', '').replace('@s.whatsapp.net', '').replace(/\D/g, '');
 
     // O phone é LID quando:
-    // 1. O raw veio com @lid
-    // 2. O telefone limpo é igual ao chatLid (ambos são LID)
-    const isPhoneLid = (isLidRaw === true) || (chatLid && telefoneLimpo === chatLid);
+    // 1. O raw veio com @lid (nem sempre acontece!)
+    // 2. O telefone limpo é igual ao chatLid
+    // 3. HEURÍSTICA: telefone com >13 dígitos e não é grupo (Z-API às vezes manda LID sem @lid)
+    // 4. HEURÍSTICA: telefone não começa com código de país válido (55=BR) e tem 12+ dígitos
+    const isPhoneLid = (isLidRaw === true) ||
+      (chatLid && telefoneLimpo === chatLid) ||
+      (telefoneLimpo.length > 13 && !isGroup) ||
+      (telefoneLimpo.length >= 12 && !telefoneLimpo.startsWith('55') && !isGroup);
 
     // O phone é REAL quando NÃO é LID
     const isPhoneReal = !isPhoneLid;
@@ -219,22 +224,28 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
       }
 
     } else {
-      // --- CRIAR NOVO CONTATO ---
+      // --- CRIAR NOVO CONTATO (com proteção contra duplicata) ---
       let avatarUrl = null;
       if (isPhoneReal) {
         try { avatarUrl = await buscarFotoPerfil(telefoneLimpo); } catch { }
       }
 
-      // Salvar chatLid como lid (chave principal pra futura busca)
       const lidValue = chatLid || (isPhoneLid ? telefoneLimpo : null);
 
+      // ON CONFLICT: se telefone já existe, retorna o existente em vez de crashar
       const novo = await client.query(
         `INSERT INTO contatos (nome, telefone, avatar_url, lid)
-         VALUES ($1, $2, $3, $4) RETURNING id`,
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (telefone) DO UPDATE SET
+           lid = COALESCE(contatos.lid, EXCLUDED.lid),
+           nome = CASE WHEN EXCLUDED.nome ~ '^\d+$' THEN contatos.nome ELSE COALESCE(EXCLUDED.nome, contatos.nome) END,
+           avatar_url = COALESCE(contatos.avatar_url, EXCLUDED.avatar_url),
+           atualizado_em = NOW()
+         RETURNING id`,
         [nome || telefoneLimpo, telefoneLimpo, avatarUrl, isGroup ? null : lidValue]
       );
       contatoId = novo.rows[0].id;
-      logger.info({ contatoId, telefone: telefoneLimpo, nome, lid: lidValue, isGroup }, '[WA] 🆕 Novo contato criado');
+      logger.info({ contatoId, telefone: telefoneLimpo, nome, lid: lidValue, isGroup }, '[WA] 🆕 Contato criado/encontrado');
     }
 
     // ============================================================
