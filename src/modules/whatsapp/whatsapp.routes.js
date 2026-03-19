@@ -224,6 +224,7 @@ router.post('/webhook', async (req, res) => {
     logger.info({
       tipo: body.type || body.status || 'desconhecido',
       phone: body.phone,
+      chatLid: body.chatLid || null,
       fromMe: body.fromMe,
       hasText: !!body.text,
       hasImage: !!body.image,
@@ -349,6 +350,12 @@ router.post('/webhook', async (req, res) => {
       const isLidRaw = telefoneRaw.includes('@lid');
       let telefone = telefoneRaw.replace('@c.us', '').replace('@s.whatsapp.net', '').replace('@g.us', '').replace('@lid', '').replace(/\D/g, '');
 
+      // ===== CHAVE DO FIX: extrair chatLid do webhook =====
+      // Z-API envia chatLid como campo separado — é o LID ESTÁVEL da conversa
+      // Quando fromMe=true: chatLid = "7443250466429@lid", phone = "7443250466429@lid"
+      // Quando fromMe=false (resposta): chatLid = "7443250466429@lid", phone = "557193908345" (REAL!)
+      const chatLidRaw = body.chatLid ? String(body.chatLid).replace('@lid', '').replace(/\D/g, '') : null;
+
       const isGroup = body.isGroup || false;
       const fromMe = body.fromMe || false;
 
@@ -414,7 +421,7 @@ router.post('/webhook', async (req, res) => {
         nome = body.chatName || body.senderName || body.pushName || body.name || telefone;
       }
 
-      logger.info(`[Webhook] tel=${telefone} fromMe=${fromMe} isGroup=${isGroup} nome=${nome} isLidRaw=${isLidRaw}`);
+      logger.info(`[Webhook] tel=${telefone} fromMe=${fromMe} isGroup=${isGroup} nome=${nome} isLidRaw=${isLidRaw} chatLid=${chatLidRaw}`);
 
       // messageId
       const waMessageId = body.messageId || body.id?.id || body.zapiMessageId || body.id?._serialized || body.ids?.[0]?.id;
@@ -488,7 +495,7 @@ router.post('/webhook', async (req, res) => {
       // Processar
       const resultado = await whatsappService.processarMensagemRecebida({
         telefone, nome, corpo, tipo, waMessageId: waMessageIdFinal,
-        isGroup, fromMe, mediaUrl, nomeParticipante, isLidRaw,
+        isGroup, fromMe, mediaUrl, nomeParticipante, isLidRaw, chatLid: chatLidRaw,
       });
 
       if (resultado) {
