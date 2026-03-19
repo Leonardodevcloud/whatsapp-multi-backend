@@ -191,17 +191,15 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
       }
     }
 
-    // PASSO 5 (NOVO): Se AINDA não encontrou e não é LID, buscar por LID no campo lid
-    // (caso o contato já foi unificado antes e o lid está no campo lid, não no telefone)
+    // PASSO 5: Se AINDA não encontrou e não é LID, buscar por LID no campo lid
     if (contatoResult.rows.length === 0 && !isLid) {
       // Nada a fazer aqui — o telefone real é novo mesmo
     }
 
-    // PASSO 6 (NOVO): Verificar se existe contato DUPLICADO com LID como telefone
+    // PASSO 6: Verificar se existe contato DUPLICADO com LID como telefone
     // E OUTRO contato com telefone real — merge de tickets se necessário
     if (contatoResult.rows.length === 0 && !isLid && !fromMe) {
-      // Última tentativa: buscar por nome parcial (push name pode variar um pouco)
-      // Mas só se o nome não é um número
+      // Tentar por nome (quando nome não é número)
       if (nome && !/^\d+$/.test(nome)) {
         const nomeBusca = await client.query(
           `SELECT id, nome, telefone, avatar_url, lid FROM contatos
@@ -215,7 +213,7 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
             contatoId: contatoLid.id,
             telefoneLid: contatoLid.telefone,
             telefoneReal: telefoneLimpo,
-          }, '[WA] UNIFICAÇÃO LID (case-insensitive): atualizando telefone');
+          }, '[WA] UNIFICAÇÃO LID (por nome): atualizando telefone');
 
           await client.query(
             `UPDATE contatos SET telefone = $1, lid = $2, atualizado_em = NOW() WHERE id = $3`,
@@ -226,6 +224,84 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
             `SELECT id, nome, telefone, avatar_url, lid FROM contatos WHERE id = $1`,
             [contatoLid.id]
           );
+        }
+      }
+    }
+
+    // ====== PASSO 7 (CRÍTICO): MATCH POR TICKET RECENTE ======
+    // Quando o nome é só número (Z-API não mandou nome real) e não encontrou contato,
+    // buscar contato LID que tenha ticket ativo recente (última 1h).
+    // Lógica: se eu mandei msg pelo celular (fromMe=true, cria ticket LID) e a pessoa
+    // respondeu (fromMe=false, número real), o ticket LID foi atualizado recentemente.
+    if (contatoResult.rows.length === 0 && !isLid && !fromMe) {
+      const ticketLidMatch = await client.query(
+        `SELECT c.id, c.nome, c.telefone, c.avatar_url, c.lid
+         FROM contatos c
+         JOIN tickets t ON t.contato_id = c.id
+         WHERE LENGTH(c.telefone) > 13
+           AND t.status IN ('pendente', 'aberto', 'aguardando')
+           AND t.ultima_mensagem_em > NOW() - INTERVAL '2 hours'
+         ORDER BY t.ultima_mensagem_em DESC
+         LIMIT 5`,
+        []
+      );
+
+      // Se encontrou apenas 1 candidato, é quase certo que é ele
+      if (ticketLidMatch.rows.length === 1) {
+        const contatoLid = ticketLidMatch.rows[0];
+        logger.info({
+          contatoId: contatoLid.id,
+          nomeLid: contatoLid.nome,
+          telefoneLid: contatoLid.telefone,
+          telefoneReal: telefoneLimpo,
+        }, '[WA] UNIFICAÇÃO LID (por ticket recente — único candidato): atualizando');
+
+        await client.query(
+          `UPDATE contatos SET telefone = $1, lid = $2, atualizado_em = NOW() WHERE id = $3`,
+          [telefoneLimpo, contatoLid.telefone, contatoLid.id]
+        );
+
+        // Atualizar nome se o que veio não é número
+        if (nome && !/^\d+$/.test(nome) && nome !== contatoLid.nome) {
+          await client.query(`UPDATE contatos SET nome = $1 WHERE id = $2`, [nome, contatoLid.id]);
+        }
+
+        contatoResult = await client.query(
+          `SELECT id, nome, telefone, avatar_url, lid FROM contatos WHERE id = $1`,
+          [contatoLid.id]
+        );
+
+        logger.info(`[WA] UNIFICAÇÃO OK (ticket recente): ${contatoLid.telefone} → ${telefoneLimpo}`);
+
+      } else if (ticketLidMatch.rows.length > 1) {
+        // Múltiplos candidatos — tentar match por nome se disponível
+        if (nome && !/^\d+$/.test(nome)) {
+          const matchPorNome = ticketLidMatch.rows.find(c => c.nome?.toLowerCase() === nome.toLowerCase());
+          if (matchPorNome) {
+            logger.info({
+              contatoId: matchPorNome.id,
+              nomeLid: matchPorNome.nome,
+              telefoneReal: telefoneLimpo,
+            }, '[WA] UNIFICAÇÃO LID (ticket recente + nome match): atualizando');
+
+            await client.query(
+              `UPDATE contatos SET telefone = $1, lid = $2, atualizado_em = NOW() WHERE id = $3`,
+              [telefoneLimpo, matchPorNome.telefone, matchPorNome.id]
+            );
+
+            contatoResult = await client.query(
+              `SELECT id, nome, telefone, avatar_url, lid FROM contatos WHERE id = $1`,
+              [matchPorNome.id]
+            );
+          }
+        }
+
+        // Se ainda não encontrou, NÃO unificar — criar contato novo é mais seguro
+        if (contatoResult.rows.length === 0) {
+          logger.warn({
+            telefoneReal: telefoneLimpo,
+            candidatos: ticketLidMatch.rows.map(c => ({ id: c.id, nome: c.nome, tel: c.telefone })),
+          }, '[WA] Múltiplos candidatos LID — não unificou (ambíguo)');
         }
       }
     }
