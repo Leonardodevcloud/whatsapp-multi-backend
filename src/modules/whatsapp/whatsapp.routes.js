@@ -344,8 +344,9 @@ router.post('/webhook', async (req, res) => {
 
     // ---- MENSAGEM (texto, mídia, localização, contato, sticker) ----
     if (body.phone) {
-      // Limpar telefone
+      // Limpar telefone — detectar @lid ANTES de limpar
       let telefoneRaw = String(body.phone);
+      const isLidRaw = telefoneRaw.includes('@lid');
       let telefone = telefoneRaw.replace('@c.us', '').replace('@s.whatsapp.net', '').replace('@g.us', '').replace('@lid', '').replace(/\D/g, '');
 
       const isGroup = body.isGroup || false;
@@ -413,7 +414,7 @@ router.post('/webhook', async (req, res) => {
         nome = body.chatName || body.senderName || body.pushName || body.name || telefone;
       }
 
-      logger.info(`[Webhook] tel=${telefone} fromMe=${fromMe} isGroup=${isGroup} nome=${nome}`);
+      logger.info(`[Webhook] tel=${telefone} fromMe=${fromMe} isGroup=${isGroup} nome=${nome} isLidRaw=${isLidRaw}`);
 
       // messageId
       const waMessageId = body.messageId || body.id?.id || body.zapiMessageId || body.id?._serialized || body.ids?.[0]?.id;
@@ -487,7 +488,7 @@ router.post('/webhook', async (req, res) => {
       // Processar
       const resultado = await whatsappService.processarMensagemRecebida({
         telefone, nome, corpo, tipo, waMessageId: waMessageIdFinal,
-        isGroup, fromMe, mediaUrl, nomeParticipante,
+        isGroup, fromMe, mediaUrl, nomeParticipante, isLidRaw,
       });
 
       if (resultado) {
