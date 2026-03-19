@@ -1,5 +1,5 @@
 // src/modules/whatsapp/whatsapp.routes.js
-// Rotas WhatsApp — Z-API + Webhook (CORRIGIDO — revoke pago + stickers galeria)
+// Rotas WhatsApp — Z-API + Webhook (CORRIGIDO — revoke pago + stickers galeeeeeria)
 
 const { Router } = require('express');
 const whatsappService = require('./whatsapp.service');
