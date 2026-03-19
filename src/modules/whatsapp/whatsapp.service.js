@@ -721,9 +721,89 @@ async function listarStickersGaleria({ limite = 30 }) {
   } catch { return []; }
 }
 
+/**
+ * Mapear LIDs de contatos que ainda não têm lid salvo.
+ * Usa Z-API phone-exists pra converter telefone → lid.
+ * Rate limited: 1 request por segundo pra não sobrecarregar.
+ */
+async function mapearLidsContatos({ limite = 50 }) {
+  if (!conexaoWA.instanceId || !conexaoWA.token) {
+    throw new AppError('Z-API não configurada', 503);
+  }
+
+  // Buscar contatos sem lid e com telefone real (<=13 dígitos, começa com 55)
+  const contatos = await query(
+    `SELECT id, nome, telefone FROM contatos
+     WHERE lid IS NULL
+       AND telefone IS NOT NULL
+       AND LENGTH(telefone) <= 13
+       AND telefone ~ '^\\d+$'
+     ORDER BY id DESC
+     LIMIT $1`,
+    [limite]
+  );
+
+  logger.info(`[WA] Mapeando LIDs: ${contatos.rows.length} contatos sem lid`);
+
+  let mapeados = 0;
+  let erros = 0;
+  const resultados = [];
+
+  for (const contato of contatos.rows) {
+    try {
+      // Chamar Z-API phone-exists
+      const response = await fetch(
+        `${conexaoWA.baseUrl}/phone-exists/${contato.telefone}`,
+        { headers: conexaoWA.headers }
+      );
+
+      if (!response.ok) {
+        erros++;
+        continue;
+      }
+
+      const data = await response.json();
+
+      // Z-API retorna: { exists: true/false, phone: "...", lid: "999@lid" }
+      const lidRetornado = data.lid || data.chatLid || null;
+
+      if (lidRetornado && data.exists !== false) {
+        // Limpar o lid (remover @lid suffix se presente)
+        const lidLimpo = String(lidRetornado).replace('@lid', '').replace(/\D/g, '');
+
+        if (lidLimpo) {
+          await query(
+            `UPDATE contatos SET lid = $1, atualizado_em = NOW() WHERE id = $2`,
+            [lidLimpo, contato.id]
+          );
+          mapeados++;
+          resultados.push({ id: contato.id, nome: contato.nome, telefone: contato.telefone, lid: lidLimpo });
+          logger.info(`[WA] LID mapeado: ${contato.telefone} → ${lidLimpo} (${contato.nome})`);
+        }
+      }
+
+      // Rate limit: 1 request por segundo
+      await new Promise(r => setTimeout(r, 1000));
+    } catch (err) {
+      erros++;
+      logger.error({ err: err.message, telefone: contato.telefone }, '[WA] Erro ao mapear LID');
+    }
+  }
+
+  logger.info({ total: contatos.rows.length, mapeados, erros }, '[WA] Mapeamento de LIDs concluído');
+
+  return {
+    total: contatos.rows.length,
+    mapeados,
+    erros,
+    resultados,
+  };
+}
+
 module.exports = {
   enviarMensagemTexto, enviarAudio, enviarImagem, enviarVideo, enviarDocumento,
   buscarFotoPerfil, processarMensagemRecebida, iniciarConversa,
   reagirMensagem, deletarMensagem, encaminharMensagem, enviarSticker, listarStickersGaleria,
+  mapearLidsContatos,
   obterQrCode, obterStatus, reconectar, forcarLogout,
 };
