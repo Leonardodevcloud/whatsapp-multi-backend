@@ -55,6 +55,23 @@ router.patch('/:id', verificarToken, async (req, res, next) => {
   }
 });
 
+// POST /api/tickets/criar-para-contato — criar chamado sem enviar mensagem (abre chat direto)
+router.post('/criar-para-contato', verificarToken, async (req, res, next) => {
+  try {
+    const { contato_id } = req.body;
+    if (!contato_id) return res.status(400).json({ erro: 'contato_id é obrigatório' });
+
+    const ticket = await ticketsService.criarParaContato({
+      contatoId: contato_id,
+      usuarioId: req.usuario.id,
+      ip: req.ip,
+    });
+    res.json(ticket);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // POST /api/tickets/:id/aceitar — atendente aceita ticket da fila
 router.post('/:id/aceitar', verificarToken, async (req, res, next) => {
   try {
