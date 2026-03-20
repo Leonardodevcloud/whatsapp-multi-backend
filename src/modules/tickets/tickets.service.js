@@ -353,7 +353,7 @@ async function transferirTicket({ ticketId, filaId, usuarioId, motivoTransferenc
 /**
  * Resolver ticket
  */
-async function resolverTicket({ ticketId, usuarioId, ip }) {
+async function resolverTicket({ ticketId, usuarioId, ip, motivoId, motivoTexto }) {
   const tId = validarId(ticketId);
 
   const ticket = await query(`SELECT * FROM tickets WHERE id = $1`, [tId]);
@@ -364,8 +364,8 @@ async function resolverTicket({ ticketId, usuarioId, ip }) {
   );
 
   await query(
-    `UPDATE tickets SET status = 'resolvido', tempo_resolucao_seg = $1, atualizado_em = NOW() WHERE id = $2`,
-    [tempoResolucao, tId]
+    `UPDATE tickets SET status = 'resolvido', tempo_resolucao_seg = $1, motivo_fechamento_id = $2, motivo_fechamento_texto = $3, atualizado_em = NOW() WHERE id = $4`,
+    [tempoResolucao, motivoId || null, motivoTexto || null, tId]
   );
 
   // Mensagem de sistema com nome e hora
@@ -496,6 +496,69 @@ async function obterContadores(usuarioId) {
   return resultado.rows[0];
 }
 
+// ============================================================
+// MOTIVOS DE ATENDIMENTO — CRUD
+// ============================================================
+
+async function listarMotivos() {
+  const resultado = await query(
+    `SELECT id, nome, ativo, ordem FROM motivos_atendimento ORDER BY ordem ASC, nome ASC`
+  );
+  return resultado.rows;
+}
+
+async function listarMotivosAtivos() {
+  const resultado = await query(
+    `SELECT id, nome FROM motivos_atendimento WHERE ativo = TRUE ORDER BY ordem ASC, nome ASC`
+  );
+  return resultado.rows;
+}
+
+async function criarMotivo({ nome, ordem }) {
+  if (!nome?.trim()) throw new AppError('Nome do motivo é obrigatório', 400);
+  const resultado = await query(
+    `INSERT INTO motivos_atendimento (nome, ordem) VALUES ($1, $2) RETURNING *`,
+    [nome.trim(), ordem || 0]
+  );
+  return resultado.rows[0];
+}
+
+async function atualizarMotivo({ id, nome, ativo, ordem }) {
+  const mId = validarId(id);
+  const updates = [];
+  const params = [];
+  let idx = 1;
+
+  if (nome !== undefined) { updates.push(`nome = $${idx++}`); params.push(nome.trim()); }
+  if (ativo !== undefined) { updates.push(`ativo = $${idx++}`); params.push(ativo); }
+  if (ordem !== undefined) { updates.push(`ordem = $${idx++}`); params.push(ordem); }
+
+  if (updates.length === 0) throw new AppError('Nada para atualizar', 400);
+
+  updates.push('atualizado_em = NOW()');
+  params.push(mId);
+
+  const resultado = await query(
+    `UPDATE motivos_atendimento SET ${updates.join(', ')} WHERE id = $${idx} RETURNING *`,
+    params
+  );
+  if (resultado.rows.length === 0) throw new AppError(ERROS.NAO_ENCONTRADO, 404);
+  return resultado.rows[0];
+}
+
+async function deletarMotivo(id) {
+  const mId = validarId(id);
+  // Não deletar se há tickets usando
+  const usado = await query(`SELECT COUNT(*) as total FROM tickets WHERE motivo_fechamento_id = $1`, [mId]);
+  if (parseInt(usado.rows[0].total) > 0) {
+    // Desativar em vez de deletar
+    await query(`UPDATE motivos_atendimento SET ativo = FALSE, atualizado_em = NOW() WHERE id = $1`, [mId]);
+    return { desativado: true };
+  }
+  await query(`DELETE FROM motivos_atendimento WHERE id = $1`, [mId]);
+  return { deletado: true };
+}
+
 module.exports = {
   listarTickets,
   obterTicketPorId,
@@ -508,4 +571,9 @@ module.exports = {
   marcarAguardando,
   obterContadores,
   criarParaContato,
+  listarMotivos,
+  listarMotivosAtivos,
+  criarMotivo,
+  atualizarMotivo,
+  deletarMotivo,
 };
