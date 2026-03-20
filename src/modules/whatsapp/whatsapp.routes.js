@@ -189,6 +189,33 @@ router.get('/stickers-galeria', verificarToken, async (req, res, next) => {
   }
 });
 
+// POST /api/whatsapp/favoritar-sticker — salvar sticker como favorito
+router.post('/favoritar-sticker', verificarToken, async (req, res, next) => {
+  try {
+    const { url } = req.body;
+    if (!url) return res.status(400).json({ erro: 'url do sticker é obrigatória' });
+
+    const { query: dbQuery } = require('../../config/database');
+    await dbQuery(
+      `INSERT INTO stickers_galeria (url) VALUES ($1) ON CONFLICT (url) DO UPDATE SET usado_em = NOW()`,
+      [url]
+    );
+    res.json({ sucesso: true });
+  } catch (err) { next(err); }
+});
+
+// DELETE /api/whatsapp/favoritar-sticker — remover sticker dos favoritos
+router.delete('/favoritar-sticker', verificarToken, async (req, res, next) => {
+  try {
+    const { url } = req.body;
+    if (!url) return res.status(400).json({ erro: 'url do sticker é obrigatória' });
+
+    const { query: dbQuery } = require('../../config/database');
+    await dbQuery(`DELETE FROM stickers_galeria WHERE url = $1`, [url]);
+    res.json({ sucesso: true });
+  } catch (err) { next(err); }
+});
+
 // POST /api/whatsapp/mapear-lids — mapear LIDs de contatos via Z-API phone-exists
 // Chama phone-exists pra cada contato sem lid (rate limited: 1/segundo)
 router.post('/mapear-lids', verificarToken, verificarAdmin, async (req, res, next) => {
