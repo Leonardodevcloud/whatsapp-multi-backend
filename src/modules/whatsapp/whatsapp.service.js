@@ -481,11 +481,13 @@ async function enviarVideo({ ticketId, videoBase64, caption, usuarioId }) {
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.message || `HTTP ${response.status}`);
 
+    // Salvar media_url com o base64 completo (consistente com enviarImagem)
+    // O frontend precisa do media_url pra renderizar o player
     const msgResult = await query(
-      `INSERT INTO mensagens (ticket_id, usuario_id, corpo, tipo, wa_message_id, is_from_me, status_envio)
-       VALUES ($1, $2, $3, 'video', $4, TRUE, 'enviada')
-       RETURNING id, corpo, tipo, is_from_me, status_envio, criado_em`,
-      [ticketId, usuarioId, caption || '🎥 Vídeo', data.zapiMessageId || data.messageId || 'sent']
+      `INSERT INTO mensagens (ticket_id, usuario_id, corpo, tipo, wa_message_id, is_from_me, status_envio, media_url)
+       VALUES ($1, $2, $3, 'video', $4, TRUE, 'enviada', $5)
+       RETURNING id, corpo, tipo, is_from_me, status_envio, criado_em, media_url`,
+      [ticketId, usuarioId, caption || '🎥 Vídeo', data.zapiMessageId || data.messageId || 'sent', videoBase64]
     );
     await _atualizarPreviewTicket(ticketId, caption || '🎥 Vídeo');
     return msgResult.rows[0];
