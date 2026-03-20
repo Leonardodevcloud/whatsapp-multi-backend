@@ -115,6 +115,82 @@ async function obterTicketPorId(ticketId) {
 }
 
 /**
+ * Criar ticket para contato SEM enviar mensagem (iniciar conversa direto)
+ * Reaproveita ticket existente aberto/pendente/aguardando ou resolvido.
+ */
+async function criarParaContato({ contatoId, usuarioId, ip }) {
+  const cId = validarId(contatoId);
+  const uId = validarId(usuarioId);
+
+  // Verificar se já existe ticket aberto/pendente/aguardando pra este contato
+  const ticketExistente = await query(
+    `SELECT t.id FROM tickets t
+     WHERE t.contato_id = $1 AND t.status IN ('aberto', 'pendente', 'aguardando')
+     ORDER BY t.id DESC LIMIT 1`,
+    [cId]
+  );
+
+  let ticketId;
+
+  if (ticketExistente.rows.length > 0) {
+    ticketId = ticketExistente.rows[0].id;
+    // Atribuir ao atendente atual
+    await query(
+      `UPDATE tickets SET usuario_id = $1, status = 'aberto', atualizado_em = NOW() WHERE id = $2`,
+      [uId, ticketId]
+    );
+  } else {
+    // Tentar reabrir resolvido recente (últimos 7 dias)
+    const resolvido = await query(
+      `SELECT id FROM tickets WHERE contato_id = $1 AND status = 'resolvido'
+       AND atualizado_em > NOW() - INTERVAL '7 days'
+       ORDER BY id DESC LIMIT 1`,
+      [cId]
+    );
+
+    if (resolvido.rows.length > 0) {
+      ticketId = resolvido.rows[0].id;
+      await query(
+        `UPDATE tickets SET status = 'aberto', usuario_id = $1, atualizado_em = NOW() WHERE id = $2`,
+        [uId, ticketId]
+      );
+    } else {
+      // Criar novo ticket
+      const protocolo = `${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+      const novo = await query(
+        `INSERT INTO tickets (contato_id, status, protocolo, usuario_id, ultima_mensagem_em)
+         VALUES ($1, 'aberto', $2, $3, NOW()) RETURNING id`,
+        [cId, protocolo, uId]
+      );
+      ticketId = novo.rows[0].id;
+    }
+  }
+
+  // Mensagem de sistema
+  const nomeResult = await query(`SELECT nome FROM usuarios WHERE id = $1`, [uId]);
+  const nomeAtendente = nomeResult.rows[0]?.nome || 'Atendente';
+  const hora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Bahia' });
+  await query(
+    `INSERT INTO mensagens (ticket_id, usuario_id, corpo, tipo, is_from_me, is_internal)
+     VALUES ($1, $2, $3, 'sistema', TRUE, TRUE)`,
+    [ticketId, uId, `${nomeAtendente} iniciou conversa às ${hora}`]
+  );
+
+  await registrarAuditoria({
+    usuarioId: uId,
+    acao: 'criar_ticket_contato',
+    entidade: 'ticket',
+    entidadeId: ticketId,
+    dadosNovos: { contato_id: cId },
+    ip,
+  });
+
+  logger.info({ ticketId, contatoId: cId, usuarioId: uId }, '[Tickets] Ticket criado para contato (sem mensagem)');
+
+  return obterTicketPorId(ticketId);
+}
+
+/**
  * Atribuir ticket a um atendente
  */
 async function atribuirTicket({ ticketId, usuarioId, adminId, ip }) {
@@ -431,4 +507,5 @@ module.exports = {
   atualizarTicket,
   marcarAguardando,
   obterContadores,
+  criarParaContato,
 };
