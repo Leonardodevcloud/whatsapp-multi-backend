@@ -807,10 +807,26 @@ async function mapearLidsContatos({ limite = 50 }) {
   };
 }
 
+// Listar stickers RECEBIDOS (das mensagens) — usado na aba "Recebidos" da galeria
+async function listarStickersRecebidos({ limite = 50 }) {
+  try {
+    const resultado = await query(
+      `SELECT DISTINCT ON (media_url) id, media_url as url, criado_em as usado_em
+       FROM mensagens
+       WHERE tipo = 'sticker' AND media_url IS NOT NULL AND is_from_me = FALSE
+       ORDER BY media_url, criado_em DESC
+       LIMIT $1`,
+      [limite]
+    );
+    return resultado.rows;
+  } catch { return []; }
+}
+
 module.exports = {
   enviarMensagemTexto, enviarAudio, enviarImagem, enviarVideo, enviarDocumento,
   buscarFotoPerfil, processarMensagemRecebida, iniciarConversa,
-  reagirMensagem, deletarMensagem, encaminharMensagem, enviarSticker, listarStickersGaleria,
+  reagirMensagem, deletarMensagem, encaminharMensagem, enviarSticker,
+  listarStickersGaleria, listarStickersRecebidos,
   mapearLidsContatos,
   obterQrCode, obterStatus, reconectar, forcarLogout,
 };
