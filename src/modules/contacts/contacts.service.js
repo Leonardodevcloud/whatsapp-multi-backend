@@ -42,7 +42,6 @@ async function listarContatos({ cursor, limite = 100, busca, tipo, offset = 0 })
 
   params.push(limiteVal);
   params.push(parseInt(offset) || 0);
-  params.push(limiteVal);
 
   const resultado = await query(
     `SELECT c.id, c.nome, c.telefone, c.avatar_url, c.email, c.criado_em,
