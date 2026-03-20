@@ -179,10 +179,10 @@ router.post('/enviar-sticker', verificarToken, async (req, res, next) => {
   }
 });
 
-// GET /api/whatsapp/stickers-galeria — listar stickers recebidos
+// GET /api/whatsapp/stickers-galeria — listar stickers RECEBIDOS (das mensagens)
 router.get('/stickers-galeria', verificarToken, async (req, res, next) => {
   try {
-    const stickers = await whatsappService.listarStickersGaleria({ limite: parseInt(req.query.limite) || 30 });
+    const stickers = await whatsappService.listarStickersRecebidos({ limite: parseInt(req.query.limite) || 50 });
     res.json({ stickers });
   } catch (err) {
     next(err);
@@ -207,13 +207,23 @@ router.post('/favoritar-sticker', verificarToken, async (req, res, next) => {
 // DELETE /api/whatsapp/favoritar-sticker — remover sticker dos favoritos
 router.delete('/favoritar-sticker', verificarToken, async (req, res, next) => {
   try {
-    const { url } = req.body;
+    const url = req.query.url || req.body?.url;
     if (!url) return res.status(400).json({ erro: 'url do sticker é obrigatória' });
 
     const { query: dbQuery } = require('../../config/database');
     await dbQuery(`DELETE FROM stickers_galeria WHERE url = $1`, [url]);
     res.json({ sucesso: true });
   } catch (err) { next(err); }
+});
+
+// GET /api/whatsapp/stickers-favoritos — listar stickers favoritados pelo atendente
+router.get('/stickers-favoritos', verificarToken, async (req, res, next) => {
+  try {
+    const stickers = await whatsappService.listarStickersGaleria({ limite: 50 });
+    res.json({ stickers });
+  } catch (err) {
+    next(err);
+  }
 });
 
 // POST /api/whatsapp/mapear-lids — mapear LIDs de contatos via Z-API phone-exists
