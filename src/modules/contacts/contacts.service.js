@@ -4,14 +4,14 @@
 const { query, getClient } = require('../../config/database');
 const AppError = require('../../shared/AppError');
 const { registrarAuditoria } = require('../../shared/audit');
-const { validarId, validarPaginacao } = require('../../shared/validators');
+const { validarId } = require('../../shared/validators');
 const logger = require('../../shared/logger');
 
 /**
  * Listar contatos com filtro por tipo (grupo/individual), ordenado por total de tickets
  */
-async function listarContatos({ cursor, limite = 100, busca, tipo }) {
-  const { cursor: cursorVal, limite: limiteVal } = validarPaginacao(cursor, limite);
+async function listarContatos({ cursor, limite = 100, busca, tipo, offset = 0 }) {
+  const limiteVal = Math.min(parseInt(limite) || 100, 200);
 
   const condicoes = [];
   const params = [];
@@ -31,6 +31,17 @@ async function listarContatos({ cursor, limite = 100, busca, tipo }) {
   }
 
   const where = condicoes.length > 0 ? `WHERE ${condicoes.join(' AND ')}` : '';
+
+  // Contar total (sem limite)
+  const countParams = [...params];
+  const countResult = await query(
+    `SELECT COUNT(*) as total FROM contatos c ${where}`,
+    countParams
+  );
+  const total = parseInt(countResult.rows[0]?.total || 0);
+
+  params.push(limiteVal);
+  params.push(parseInt(offset) || 0);
   params.push(limiteVal);
 
   const resultado = await query(
@@ -46,14 +57,14 @@ async function listarContatos({ cursor, limite = 100, busca, tipo }) {
      FROM contatos c
      ${where}
      ORDER BY (SELECT COUNT(*) FROM tickets t WHERE t.contato_id = c.id) DESC, c.nome ASC
-     LIMIT $${idx}`,
+     LIMIT $${idx} OFFSET $${idx + 1}`,
     params
   );
 
   const contatos = resultado.rows;
-  const proximoCursor = contatos.length === limiteVal ? contatos[contatos.length - 1].id : null;
+  const temMais = (parseInt(offset) || 0) + contatos.length < total;
 
-  return { contatos, proximoCursor };
+  return { contatos, total, temMais };
 }
 
 /**
