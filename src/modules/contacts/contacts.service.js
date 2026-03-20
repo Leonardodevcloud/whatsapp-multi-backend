@@ -1,30 +1,33 @@
 // src/modules/contacts/contacts.service.js
-// Serviço de contatos — CRUD, busca, histórico
+// Serviço de contatos — CRUD, tags, busca com filtro grupo/individual
 
-const { query } = require('../../config/database');
+const { query, getClient } = require('../../config/database');
 const AppError = require('../../shared/AppError');
-const { validarId, validarPaginacao, validarTelefone } = require('../../shared/validators');
 const { registrarAuditoria } = require('../../shared/audit');
+const { validarId, validarPaginacao } = require('../../shared/validators');
+const logger = require('../../shared/logger');
 
 /**
- * Listar contatos com busca e paginação por cursor
+ * Listar contatos com filtro por tipo (grupo/individual), ordenado por total de tickets
  */
-async function listarContatos({ cursor, limite = 50, busca }) {
+async function listarContatos({ cursor, limite = 100, busca, tipo }) {
   const { cursor: cursorVal, limite: limiteVal } = validarPaginacao(cursor, limite);
 
   const condicoes = [];
   const params = [];
   let idx = 1;
 
-  if (cursorVal) {
-    condicoes.push(`c.id < $${idx++}`);
-    params.push(cursorVal);
-  }
-
   if (busca) {
     condicoes.push(`(c.nome ILIKE $${idx} OR c.telefone ILIKE $${idx} OR c.email ILIKE $${idx})`);
     params.push(`%${busca}%`);
     idx++;
+  }
+
+  // Filtrar por tipo: grupos têm telefone com 15+ dígitos
+  if (tipo === 'grupo') {
+    condicoes.push(`LENGTH(c.telefone) > 15`);
+  } else if (tipo === 'contato') {
+    condicoes.push(`LENGTH(c.telefone) <= 15`);
   }
 
   const where = condicoes.length > 0 ? `WHERE ${condicoes.join(' AND ')}` : '';
@@ -34,6 +37,7 @@ async function listarContatos({ cursor, limite = 50, busca }) {
     `SELECT c.id, c.nome, c.telefone, c.avatar_url, c.email, c.criado_em,
             (SELECT COUNT(*) FROM tickets t WHERE t.contato_id = c.id) as total_tickets,
             (SELECT t.ultima_mensagem_em FROM tickets t WHERE t.contato_id = c.id ORDER BY t.criado_em DESC LIMIT 1) as ultimo_contato,
+            (SELECT t.status FROM tickets t WHERE t.contato_id = c.id ORDER BY t.criado_em DESC LIMIT 1) as ultimo_status,
             COALESCE(
               (SELECT json_agg(json_build_object('id', tg.id, 'nome', tg.nome, 'cor', tg.cor))
                FROM contato_tags ct JOIN tags tg ON tg.id = ct.tag_id
@@ -41,7 +45,7 @@ async function listarContatos({ cursor, limite = 50, busca }) {
             ) as tags
      FROM contatos c
      ${where}
-     ORDER BY c.id DESC
+     ORDER BY (SELECT COUNT(*) FROM tickets t WHERE t.contato_id = c.id) DESC, c.nome ASC
      LIMIT $${idx}`,
     params
   );
@@ -76,6 +80,7 @@ async function obterContatoPorId(contatoId) {
   // Últimos 20 tickets do contato
   const tickets = await query(
     `SELECT t.id, t.status, t.protocolo, t.assunto, t.prioridade, t.criado_em, t.fechado_em,
+            t.ultima_mensagem_em, t.ultima_mensagem_preview,
             u.nome as atendente_nome, f.nome as fila_nome
      FROM tickets t
      LEFT JOIN usuarios u ON u.id = t.usuario_id
@@ -90,6 +95,29 @@ async function obterContatoPorId(contatoId) {
 }
 
 /**
+ * Buscar histórico completo de mensagens de um contato (todos os tickets)
+ */
+async function obterHistoricoMensagens(contatoId, { limite = 200 }) {
+  const id = validarId(contatoId);
+
+  const resultado = await query(
+    `SELECT m.id, m.corpo, m.tipo, m.is_from_me, m.is_internal, m.criado_em,
+            m.media_url, m.status_envio, m.nome_participante, m.reacao, m.deletada,
+            t.protocolo, t.id as ticket_id,
+            u.nome as usuario_nome
+     FROM mensagens m
+     JOIN tickets t ON t.id = m.ticket_id
+     LEFT JOIN usuarios u ON u.id = m.usuario_id
+     WHERE t.contato_id = $1
+     ORDER BY m.criado_em ASC
+     LIMIT $2`,
+    [id, limite]
+  );
+
+  return { mensagens: resultado.rows, total: resultado.rows.length };
+}
+
+/**
  * Atualizar contato
  */
 async function atualizarContato({ contatoId, dados, usuarioId, ip }) {
@@ -101,7 +129,7 @@ async function atualizarContato({ contatoId, dados, usuarioId, ip }) {
   let idx = 1;
 
   for (const [campo, valor] of Object.entries(dados)) {
-    if (camposPermitidos.includes(campo)) {
+    if (camposPermitidos.includes(campo) && valor !== undefined) {
       updates.push(`${campo} = $${idx++}`);
       params.push(valor);
     }
@@ -133,7 +161,7 @@ async function atualizarContato({ contatoId, dados, usuarioId, ip }) {
  */
 async function adicionarTag({ contatoId, tagId }) {
   const cId = validarId(contatoId);
-  const tId = validarId(tagId, 'tag_id');
+  const tId = validarId(tagId);
 
   await query(
     `INSERT INTO contato_tags (contato_id, tag_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
@@ -148,7 +176,7 @@ async function adicionarTag({ contatoId, tagId }) {
  */
 async function removerTag({ contatoId, tagId }) {
   const cId = validarId(contatoId);
-  const tId = validarId(tagId, 'tag_id');
+  const tId = validarId(tagId);
 
   await query(`DELETE FROM contato_tags WHERE contato_id = $1 AND tag_id = $2`, [cId, tId]);
 
@@ -158,6 +186,7 @@ async function removerTag({ contatoId, tagId }) {
 module.exports = {
   listarContatos,
   obterContatoPorId,
+  obterHistoricoMensagens,
   atualizarContato,
   adicionarTag,
   removerTag,
