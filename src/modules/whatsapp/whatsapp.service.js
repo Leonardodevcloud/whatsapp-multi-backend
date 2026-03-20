@@ -94,11 +94,29 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
   try {
     await client.query('BEGIN');
 
-    // Deduplicação
+    // Deduplicação por waMessageId
     const duplicada = await client.query(`SELECT id FROM mensagens WHERE wa_message_id = $1`, [waMessageId]);
     if (duplicada.rows.length > 0) {
       await client.query('COMMIT');
       return null;
+    }
+
+    // Deduplicação por conteúdo (fix: iniciar conversa salva com ID sistema, webhook vem com ID real)
+    // Se é fromMe e o mesmo texto foi enviado nos últimos 30 segundos, é duplicata
+    if (fromMe && corpo) {
+      const dupConteudo = await client.query(
+        `SELECT id FROM mensagens
+         WHERE corpo = $1 AND is_from_me = TRUE AND criado_em > NOW() - INTERVAL '30 seconds'
+         LIMIT 1`,
+        [corpo]
+      );
+      if (dupConteudo.rows.length > 0) {
+        // Atualizar o waMessageId da mensagem existente pro ID real da Z-API
+        await client.query(`UPDATE mensagens SET wa_message_id = $1 WHERE id = $2`, [waMessageId, dupConteudo.rows[0].id]);
+        await client.query('COMMIT');
+        logger.info({ waMessageId, existingId: dupConteudo.rows[0].id }, '[WA] Dedup por conteúdo — atualizado waMessageId');
+        return null;
+      }
     }
 
     const telefoneLimpo = telefone.replace('@c.us', '').replace('@lid', '').replace('@s.whatsapp.net', '').replace(/\D/g, '');
@@ -366,18 +384,7 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
       [(corpo || '📎 Mídia').substring(0, 200), ticketId]
     );
 
-    // Salvar sticker na galeria
-    if (tipo === 'sticker' && mediaUrl) {
-      try {
-        await client.query(
-          `INSERT INTO stickers_galeria (url, recebido_de, ticket_id)
-           VALUES ($1, $2, $3) ON CONFLICT (url) DO UPDATE SET usado_em = NOW()`,
-          [mediaUrl, contatoId, ticketId]
-        );
-      } catch (err) {
-        logger.warn({ err: err.message }, '[WA] Erro ao salvar sticker');
-      }
-    }
+    // Stickers NÃO são mais salvos automaticamente — apenas quando usuário favoritar
 
     await client.query('COMMIT');
 
