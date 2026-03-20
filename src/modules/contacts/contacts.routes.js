@@ -5,11 +5,11 @@ const { verificarToken } = require('../../middleware/auth');
 
 const router = Router();
 
-// GET /api/contacts — com filtro tipo=grupo|contato e ordenado por total_tickets
+// GET /api/contacts — com filtro tipo=grupo|contato, paginação offset, ordenado por total_tickets
 router.get('/', verificarToken, async (req, res, next) => {
   try {
-    const { cursor, limite, busca, tipo } = req.query;
-    const resultado = await contactsService.listarContatos({ cursor, limite, busca, tipo });
+    const { cursor, limite, busca, tipo, offset } = req.query;
+    const resultado = await contactsService.listarContatos({ cursor, limite, busca, tipo, offset });
     res.json(resultado);
   } catch (err) {
     next(err);
