@@ -6,13 +6,25 @@ const { limiteSensivel } = require('../../middleware/rateLimiter');
 
 const router = Router();
 
-// GET /api/ai/sugestao/:ticketId — gerar sugestão de resposta
+// GET /api/ai/sugestao/:ticketId — gerar sugestão a partir das últimas mensagens
 router.get('/sugestao/:ticketId', verificarToken, limiteSensivel, async (req, res, next) => {
   try {
     const ativa = await aiService.iaEstaAtiva();
     if (!ativa) return res.json({ sugestao: '', desativada: true });
 
     const resultado = await aiService.gerarSugestao(req.params.ticketId);
+    res.json(resultado);
+  } catch (err) { next(err); }
+});
+
+// POST /api/ai/sugestao/:ticketId — gerar sugestão a partir de texto colado pelo atendente
+router.post('/sugestao/:ticketId', verificarToken, limiteSensivel, async (req, res, next) => {
+  try {
+    const ativa = await aiService.iaEstaAtiva();
+    if (!ativa) return res.json({ sugestao: '', desativada: true });
+
+    const { mensagem_cliente } = req.body;
+    const resultado = await aiService.gerarSugestao(req.params.ticketId, mensagem_cliente);
     res.json(resultado);
   } catch (err) { next(err); }
 });
