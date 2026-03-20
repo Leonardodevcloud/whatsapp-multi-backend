@@ -99,15 +99,26 @@ async function buscarContextoMensagens(ticketId, limite = 15) {
 /**
  * Gerar sugestão de resposta para o atendente
  */
-async function gerarSugestao(ticketId) {
+async function gerarSugestao(ticketId, mensagemCliente) {
+  // Se tem mensagem customizada, não usar cache
   const cacheKey = `ai:sugestao:${ticketId}`;
-  const cached = await cacheGet(cacheKey);
-  if (cached && cached.sugestao) return cached; // Só usar cache se tem sugestão real
+  if (!mensagemCliente) {
+    const cached = await cacheGet(cacheKey);
+    if (cached && cached.sugestao) return cached;
+  }
 
   const systemPrompt = await obterSystemPrompt();
   const contexto = await buscarContextoMensagens(ticketId, 15);
 
-  if (!contexto || contexto.trim().length < 5) {
+  // Montar contexto com mensagem colada pelo atendente
+  let contextoFinal = contexto || '';
+  if (mensagemCliente) {
+    contextoFinal = contextoFinal
+      ? `${contextoFinal}\n[Cliente]: ${mensagemCliente}`
+      : `[Cliente]: ${mensagemCliente}`;
+  }
+
+  if (!contextoFinal || contextoFinal.trim().length < 5) {
     return { sugestao: 'Ainda não há mensagens suficientes para gerar uma sugestão.' };
   }
 
@@ -116,14 +127,14 @@ A resposta deve ser direta e pronta para enviar, sem explicações, prefixos ou 
 Se a conversa não tiver contexto suficiente, sugira uma saudação apropriada.
 
 Conversa:
-${contexto}
+${contextoFinal}
 
 Sugestão de resposta:`;
 
   const sugestao = await chamarClaude({ systemPrompt, userPrompt, maxTokens: 300 });
   const resultado = { sugestao: sugestao.trim() };
 
-  if (resultado.sugestao) {
+  if (resultado.sugestao && !mensagemCliente) {
     await cacheSet(cacheKey, resultado, 300);
   }
   return resultado;
