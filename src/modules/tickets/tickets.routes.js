@@ -5,15 +5,17 @@
 const { Router } = require('express');
 const ticketsService = require('./tickets.service');
 const { verificarToken, verificarAdminOuSupervisor } = require('../../middleware/auth');
+const { broadcast } = require('../../websocket');
 
 const router = Router();
 
-// GET /api/tickets — listar com filtros e cursor
+// GET /api/tickets — listar com filtros, cursor e ordenação
+// Novo param: ordem=antigo|recente|atividade
 router.get('/', verificarToken, async (req, res, next) => {
   try {
-    const { cursor, limite, status, fila_id, usuario_id, busca, prioridade } = req.query;
+    const { cursor, limite, status, fila_id, usuario_id, busca, prioridade, ordem } = req.query;
     const resultado = await ticketsService.listarTickets({
-      cursor, limite, status, filaId: fila_id, usuarioId: usuario_id, busca, prioridade,
+      cursor, limite, status, filaId: fila_id, usuarioId: usuario_id, busca, prioridade, ordem,
     });
     res.json(resultado);
   } catch (err) {
@@ -71,6 +73,7 @@ router.post('/criar-para-contato', verificarToken, async (req, res, next) => {
     const { contato_id } = req.body;
     if (!contato_id) return res.status(400).json({ erro: 'contato_id é obrigatório' });
     const ticket = await ticketsService.criarParaContato({ contatoId: contato_id, usuarioId: req.usuario.id, ip: req.ip });
+    broadcast('ticket:atualizado', { id: ticket.id, status: ticket.status, acao: 'criar' });
     res.json(ticket);
   } catch (err) { next(err); }
 });
@@ -84,19 +87,27 @@ router.get('/:id', verificarToken, async (req, res, next) => {
 
 router.patch('/:id', verificarToken, async (req, res, next) => {
   try {
-    res.json(await ticketsService.atualizarTicket({ ticketId: req.params.id, dados: req.body, usuarioId: req.usuario.id, ip: req.ip }));
+    const ticket = await ticketsService.atualizarTicket({ ticketId: req.params.id, dados: req.body, usuarioId: req.usuario.id, ip: req.ip });
+    broadcast('ticket:atualizado', { id: ticket.id, status: ticket.status, acao: 'atualizar' });
+    res.json(ticket);
   } catch (err) { next(err); }
 });
 
 router.post('/:id/aceitar', verificarToken, async (req, res, next) => {
-  try { res.json(await ticketsService.aceitarTicket({ ticketId: req.params.id, usuarioId: req.usuario.id, ip: req.ip })); } catch (err) { next(err); }
+  try {
+    const ticket = await ticketsService.aceitarTicket({ ticketId: req.params.id, usuarioId: req.usuario.id, ip: req.ip });
+    broadcast('ticket:atualizado', { id: ticket.id, status: ticket.status, usuario_id: ticket.usuario_id, acao: 'aceitar' });
+    res.json(ticket);
+  } catch (err) { next(err); }
 });
 
 router.post('/:id/atribuir', verificarToken, verificarAdminOuSupervisor, async (req, res, next) => {
   try {
     const { usuario_id } = req.body;
     if (!usuario_id) return res.status(400).json({ erro: 'usuario_id é obrigatório' });
-    res.json(await ticketsService.atribuirTicket({ ticketId: req.params.id, usuarioId: usuario_id, adminId: req.usuario.id, ip: req.ip }));
+    const ticket = await ticketsService.atribuirTicket({ ticketId: req.params.id, usuarioId: usuario_id, adminId: req.usuario.id, ip: req.ip });
+    broadcast('ticket:atualizado', { id: ticket.id, status: ticket.status, usuario_id: ticket.usuario_id, acao: 'atribuir' });
+    res.json(ticket);
   } catch (err) { next(err); }
 });
 
@@ -104,24 +115,35 @@ router.post('/:id/transferir', verificarToken, async (req, res, next) => {
   try {
     const { fila_id, usuario_id, motivo } = req.body;
     if (!fila_id && !usuario_id) return res.status(400).json({ erro: 'Informe fila_id ou usuario_id para transferir' });
-    res.json(await ticketsService.transferirTicket({ ticketId: req.params.id, filaId: fila_id, usuarioId: usuario_id, motivoTransferencia: motivo, adminId: req.usuario.id, ip: req.ip }));
+    const ticket = await ticketsService.transferirTicket({ ticketId: req.params.id, filaId: fila_id, usuarioId: usuario_id, motivoTransferencia: motivo, adminId: req.usuario.id, ip: req.ip });
+    broadcast('ticket:atualizado', { id: ticket.id, status: ticket.status, fila_id: ticket.fila_id, usuario_id: ticket.usuario_id, acao: 'transferir' });
+    res.json(ticket);
   } catch (err) { next(err); }
 });
 
-// POST /api/tickets/:id/resolver — com motivo
 router.post('/:id/resolver', verificarToken, async (req, res, next) => {
   try {
     const { motivo_id, motivo_texto } = req.body || {};
-    res.json(await ticketsService.resolverTicket({ ticketId: req.params.id, usuarioId: req.usuario.id, ip: req.ip, motivoId: motivo_id, motivoTexto: motivo_texto }));
+    const ticket = await ticketsService.resolverTicket({ ticketId: req.params.id, usuarioId: req.usuario.id, ip: req.ip, motivoId: motivo_id, motivoTexto: motivo_texto });
+    broadcast('ticket:atualizado', { id: ticket.id, status: ticket.status, acao: 'resolver' });
+    res.json(ticket);
   } catch (err) { next(err); }
 });
 
 router.post('/:id/fechar', verificarToken, async (req, res, next) => {
-  try { res.json(await ticketsService.fecharTicket({ ticketId: req.params.id, usuarioId: req.usuario.id, ip: req.ip })); } catch (err) { next(err); }
+  try {
+    const ticket = await ticketsService.fecharTicket({ ticketId: req.params.id, usuarioId: req.usuario.id, ip: req.ip });
+    broadcast('ticket:atualizado', { id: ticket.id, status: ticket.status, acao: 'fechar' });
+    res.json(ticket);
+  } catch (err) { next(err); }
 });
 
 router.post('/:id/aguardando', verificarToken, async (req, res, next) => {
-  try { res.json(await ticketsService.marcarAguardando({ ticketId: req.params.id, usuarioId: req.usuario.id, ip: req.ip })); } catch (err) { next(err); }
+  try {
+    const ticket = await ticketsService.marcarAguardando({ ticketId: req.params.id, usuarioId: req.usuario.id, ip: req.ip });
+    broadcast('ticket:atualizado', { id: ticket.id, status: ticket.status, acao: 'aguardando' });
+    res.json(ticket);
+  } catch (err) { next(err); }
 });
 
 router.post('/:id/avaliar', async (req, res, next) => {
@@ -138,7 +160,6 @@ router.post('/:id/visualizar', verificarToken, async (req, res, next) => {
   try {
     const { query: dbQuery } = require('../../config/database');
     const { registrarMensagemSistema } = require('../messages/messages.service');
-    const { broadcast } = require('../../websocket');
     const ticketId = req.params.id;
     const usuario = req.usuario;
     const jaVisualizou = await dbQuery(
