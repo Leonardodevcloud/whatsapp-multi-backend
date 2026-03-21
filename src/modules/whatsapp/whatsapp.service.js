@@ -346,11 +346,16 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
     } else {
       const protocolo = _gerarProtocolo();
       let filaId = null;
-      if (fromMe) {
+      // Só jogar pra Dispositivo Externo se fromMe=true E o telefone é real (não LID)
+      // Z-API com LID às vezes marca fromMe=true incorretamente em mensagens recebidas
+      if (fromMe && isPhoneReal && !isGroup) {
         const filaResult = await client.query(
           `SELECT id FROM filas WHERE nome = 'Dispositivo Externo' AND ativo = TRUE LIMIT 1`
         );
         if (filaResult.rows.length > 0) filaId = filaResult.rows[0].id;
+        logger.info({ telefone: telefoneLimpo, chatLid }, '[WA] Ticket novo fromMe → Dispositivo Externo');
+      } else if (fromMe) {
+        logger.info({ telefone: telefoneLimpo, chatLid, isPhoneLid, isPhoneReal }, '[WA] fromMe=true mas telefone é LID — NÃO atribuindo a Dispositivo Externo');
       }
 
       const novo = await client.query(
