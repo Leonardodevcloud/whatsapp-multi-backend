@@ -658,7 +658,9 @@ router.post('/webhook', async (req, res) => {
         // Invalidar cache Redis das listagens (preview do ticket mudou)
         try {
           const { invalidarCacheListagens } = require('../tickets/tickets.service');
+          const { invalidarCacheMensagens } = require('../messages/messages.service');
           await invalidarCacheListagens();
+          await invalidarCacheMensagens(resultado.ticket_id);
         } catch (_) {}
 
         if (resultado.ticketNovo) {
