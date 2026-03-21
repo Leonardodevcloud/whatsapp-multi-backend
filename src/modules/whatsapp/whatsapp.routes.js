@@ -595,7 +595,58 @@ router.post('/webhook', async (req, res) => {
         return;
       }
 
-      // Processar
+      // ============================================================
+      // BROADCAST ANTECIPADO — mensagem aparece INSTANTANEAMENTE
+      // Quick lookup: 2 queries rápidas pra achar contato + ticket
+      // Broadcast preview → frontend mostra na hora
+      // Processamento pesado (LID, merge, avatar) roda DEPOIS
+      // ============================================================
+      if (!fromMe && corpo) {
+        try {
+          const { query: dbQuery } = require('../../config/database');
+          const telefoneBusca = telefone.replace('@c.us', '').replace('@lid', '').replace('@s.whatsapp.net', '').replace(/\D/g, '');
+
+          // 1 query: achar contato por chatLid, lid ou telefone
+          const contatoRapido = await dbQuery(
+            `SELECT c.id, c.nome, c.telefone, c.avatar_url FROM contatos c
+             WHERE c.lid = $1 OR c.telefone = $1 OR c.telefone = $2 OR c.lid = $2
+             LIMIT 1`,
+            [chatLidRaw || telefoneBusca, telefoneBusca]
+          );
+
+          if (contatoRapido.rows.length > 0) {
+            const ct = contatoRapido.rows[0];
+            // 2 query: achar ticket aberto/pendente desse contato
+            const ticketRapido = await dbQuery(
+              `SELECT id FROM tickets WHERE contato_id = $1 AND status NOT IN ('fechado') ORDER BY id DESC LIMIT 1`,
+              [ct.id]
+            );
+            if (ticketRapido.rows.length > 0) {
+              // Broadcast INSTANTÂNEO — frontend mostra a mensagem agora
+              broadcast('mensagem:nova', {
+                id: `preview_${Date.now()}`,
+                ticket_id: ticketRapido.rows[0].id,
+                corpo,
+                tipo,
+                media_url: mediaUrl,
+                is_from_me: false,
+                is_internal: false,
+                status_envio: 'entregue',
+                criado_em: new Date().toISOString(),
+                contato: { id: ct.id, nome: ct.nome || nome || telefoneBusca, telefone: ct.telefone },
+                nome_participante: isGroup ? nomeParticipante : null,
+                _preview: true, // Flag pra safety refetch substituir
+              });
+              logger.info({ ticketId: ticketRapido.rows[0].id, telefone: telefoneBusca }, '[Webhook] Preview broadcast instantâneo');
+            }
+          }
+        } catch (previewErr) {
+          // Preview falhou — não crítico, o processamento normal vai broadcastar depois
+          logger.warn({ err: previewErr.message }, '[Webhook] Preview broadcast falhou');
+        }
+      }
+
+      // Processar (pesado — LID, merge, avatar, etc)
       const resultado = await whatsappService.processarMensagemRecebida({
         telefone, nome, corpo, tipo, waMessageId: waMessageIdFinal,
         isGroup, fromMe, mediaUrl, nomeParticipante, isLidRaw, chatLid: chatLidRaw,
