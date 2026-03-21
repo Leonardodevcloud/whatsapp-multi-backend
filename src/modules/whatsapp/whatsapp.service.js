@@ -6,6 +6,7 @@ const conexaoWA = require('./whatsapp.connection');
 const { query, getClient } = require('../../config/database');
 const AppError = require('../../shared/AppError');
 const logger = require('../../shared/logger');
+const { uploadMidia } = require('../../shared/mediaUpload');
 
 // ============================================================
 // ENVIAR MENSAGEM DE TEXTO
@@ -433,11 +434,14 @@ async function enviarAudio({ ticketId, audioBase64, usuarioId }) {
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.message || `HTTP ${response.status}`);
 
+    // Upload para R2 (ou fallback base64)
+    const mediaUrl = await uploadMidia(audioBase64, 'audio', { ticketId });
+
     const msgResult = await query(
       `INSERT INTO mensagens (ticket_id, usuario_id, corpo, tipo, wa_message_id, is_from_me, status_envio, media_url)
        VALUES ($1, $2, '🎵 Áudio', 'audio', $3, TRUE, 'enviada', $4)
        RETURNING id, corpo, tipo, is_from_me, status_envio, criado_em, media_url`,
-      [ticketId, usuarioId, data.zapiMessageId || data.messageId || 'sent', audioBase64]
+      [ticketId, usuarioId, data.zapiMessageId || data.messageId || 'sent', mediaUrl]
     );
     await _atualizarPreviewTicket(ticketId, '🎵 Áudio');
     return msgResult.rows[0];
@@ -457,11 +461,14 @@ async function enviarImagem({ ticketId, imagemBase64, caption, usuarioId }) {
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.message || `HTTP ${response.status}`);
 
+    // Upload para R2 (ou fallback base64)
+    const mediaUrl = await uploadMidia(imagemBase64, 'imagem', { ticketId });
+
     const msgResult = await query(
       `INSERT INTO mensagens (ticket_id, usuario_id, corpo, tipo, wa_message_id, is_from_me, status_envio, media_url)
        VALUES ($1, $2, $3, 'imagem', $4, TRUE, 'enviada', $5)
        RETURNING id, corpo, tipo, is_from_me, status_envio, criado_em, media_url`,
-      [ticketId, usuarioId, caption || '📷 Imagem', data.zapiMessageId || data.messageId || 'sent', imagemBase64]
+      [ticketId, usuarioId, caption || '📷 Imagem', data.zapiMessageId || data.messageId || 'sent', mediaUrl]
     );
     await _atualizarPreviewTicket(ticketId, caption || '📷 Imagem');
     return msgResult.rows[0];
@@ -481,13 +488,14 @@ async function enviarVideo({ ticketId, videoBase64, caption, usuarioId }) {
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.message || `HTTP ${response.status}`);
 
-    // Salvar media_url com o base64 completo (consistente com enviarImagem)
-    // O frontend precisa do media_url pra renderizar o player
+    // Upload para R2 (ou fallback base64)
+    const mediaUrl = await uploadMidia(videoBase64, 'video', { ticketId });
+
     const msgResult = await query(
       `INSERT INTO mensagens (ticket_id, usuario_id, corpo, tipo, wa_message_id, is_from_me, status_envio, media_url)
        VALUES ($1, $2, $3, 'video', $4, TRUE, 'enviada', $5)
        RETURNING id, corpo, tipo, is_from_me, status_envio, criado_em, media_url`,
-      [ticketId, usuarioId, caption || '🎥 Vídeo', data.zapiMessageId || data.messageId || 'sent', videoBase64]
+      [ticketId, usuarioId, caption || '🎥 Vídeo', data.zapiMessageId || data.messageId || 'sent', mediaUrl]
     );
     await _atualizarPreviewTicket(ticketId, caption || '🎥 Vídeo');
     return msgResult.rows[0];
@@ -508,11 +516,14 @@ async function enviarDocumento({ ticketId, documentoBase64, fileName, usuarioId 
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.message || `HTTP ${response.status}`);
 
+    // Upload para R2 (ou fallback: sem media_url)
+    const mediaUrl = await uploadMidia(documentoBase64, 'documento', { ticketId, fileName });
+
     const msgResult = await query(
-      `INSERT INTO mensagens (ticket_id, usuario_id, corpo, tipo, wa_message_id, is_from_me, status_envio)
-       VALUES ($1, $2, $3, 'documento', $4, TRUE, 'enviada')
-       RETURNING id, corpo, tipo, is_from_me, status_envio, criado_em`,
-      [ticketId, usuarioId, fileName || '📄 Documento', data.zapiMessageId || data.messageId || 'sent']
+      `INSERT INTO mensagens (ticket_id, usuario_id, corpo, tipo, wa_message_id, is_from_me, status_envio, media_url, media_nome)
+       VALUES ($1, $2, $3, 'documento', $4, TRUE, 'enviada', $5, $6)
+       RETURNING id, corpo, tipo, is_from_me, status_envio, criado_em, media_url, media_nome`,
+      [ticketId, usuarioId, fileName || '📄 Documento', data.zapiMessageId || data.messageId || 'sent', mediaUrl, fileName]
     );
     await _atualizarPreviewTicket(ticketId, `📄 ${fileName || 'Documento'}`);
     return msgResult.rows[0];
