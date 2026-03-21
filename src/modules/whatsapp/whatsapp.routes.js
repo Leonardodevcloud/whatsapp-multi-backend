@@ -35,6 +35,9 @@ router.post('/enviar', verificarToken, limiteSensivel, async (req, res, next) =>
       usuarioId: req.usuario.id,
     });
 
+    // Broadcast imediato — todos os atendentes veem a mensagem na hora
+    broadcast('mensagem:nova', { ...mensagem, ticket_id: parseInt(ticket_id) });
+
     res.json({ sucesso: true, mensagem });
   } catch (err) {
     next(err);
@@ -48,6 +51,7 @@ router.post('/enviar-audio', verificarToken, limiteSensivel, async (req, res, ne
     if (!ticket_id || !audio_base64) return res.status(400).json({ erro: 'ticket_id e audio_base64 são obrigatórios' });
 
     const mensagem = await whatsappService.enviarAudio({ ticketId: ticket_id, audioBase64: audio_base64, usuarioId: req.usuario.id });
+    broadcast('mensagem:nova', { ...mensagem, ticket_id: parseInt(ticket_id) });
     res.json({ sucesso: true, mensagem });
   } catch (err) {
     next(err);
@@ -61,6 +65,7 @@ router.post('/enviar-imagem', verificarToken, limiteSensivel, async (req, res, n
     if (!ticket_id || !imagem_base64) return res.status(400).json({ erro: 'ticket_id e imagem_base64 são obrigatórios' });
 
     const mensagem = await whatsappService.enviarImagem({ ticketId: ticket_id, imagemBase64: imagem_base64, caption, usuarioId: req.usuario.id });
+    broadcast('mensagem:nova', { ...mensagem, ticket_id: parseInt(ticket_id) });
     res.json({ sucesso: true, mensagem });
   } catch (err) {
     next(err);
@@ -74,6 +79,7 @@ router.post('/enviar-video', verificarToken, limiteSensivel, async (req, res, ne
     if (!ticket_id || !video_base64) return res.status(400).json({ erro: 'ticket_id e video_base64 são obrigatórios' });
 
     const mensagem = await whatsappService.enviarVideo({ ticketId: ticket_id, videoBase64: video_base64, caption, usuarioId: req.usuario.id });
+    broadcast('mensagem:nova', { ...mensagem, ticket_id: parseInt(ticket_id) });
     res.json({ sucesso: true, mensagem });
   } catch (err) {
     next(err);
@@ -87,6 +93,7 @@ router.post('/enviar-documento', verificarToken, limiteSensivel, async (req, res
     if (!ticket_id || !documento_base64) return res.status(400).json({ erro: 'ticket_id e documento_base64 são obrigatórios' });
 
     const mensagem = await whatsappService.enviarDocumento({ ticketId: ticket_id, documentoBase64: documento_base64, fileName: file_name, usuarioId: req.usuario.id });
+    broadcast('mensagem:nova', { ...mensagem, ticket_id: parseInt(ticket_id) });
     res.json({ sucesso: true, mensagem });
   } catch (err) {
     next(err);
@@ -124,6 +131,9 @@ router.post('/iniciar-conversa', verificarToken, async (req, res, next) => {
     if (!telefone || !mensagem) return res.status(400).json({ erro: 'telefone e mensagem são obrigatórios' });
 
     const resultado = await whatsappService.iniciarConversa({ telefone, mensagem, contatoId: contato_id, usuarioId: req.usuario.id });
+    if (resultado.ticket) {
+      broadcast('ticket:atualizado', { id: resultado.ticket.id, status: resultado.ticket.status, acao: 'iniciar-conversa' });
+    }
     res.json(resultado);
   } catch (err) {
     next(err);
@@ -173,6 +183,7 @@ router.post('/enviar-sticker', verificarToken, async (req, res, next) => {
     if (!ticketId || !stickerUrl) return res.status(400).json({ erro: 'ticketId e stickerUrl são obrigatórios' });
 
     const resultado = await whatsappService.enviarSticker(ticketId, stickerUrl);
+    broadcast('mensagem:nova', { ticket_id: parseInt(ticketId), tipo: 'sticker', media_url: stickerUrl, is_from_me: true });
     res.json(resultado);
   } catch (err) {
     next(err);
