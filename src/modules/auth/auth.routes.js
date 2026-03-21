@@ -67,6 +67,18 @@ router.get('/me', verificarToken, async (req, res, next) => {
   }
 });
 
+// GET /api/auth/ws-token — retorna token para conexão WebSocket
+// O cookie httpOnly autentica — retorna o access_token pro frontend usar no WS
+router.get('/ws-token', verificarToken, (req, res) => {
+  const { accessToken } = gerarTokens({
+    id: req.usuario.id,
+    nome: req.usuario.nome,
+    email: req.usuario.email,
+    perfil: req.usuario.perfil,
+  });
+  res.json({ token: accessToken });
+});
+
 // POST /api/auth/usuarios — criar atendente (admin only)
 router.post('/usuarios', verificarToken, verificarAdmin, async (req, res, next) => {
   try {
