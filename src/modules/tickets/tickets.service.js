@@ -1,5 +1,6 @@
 // src/modules/tickets/tickets.service.js
 // Serviço de tickets — CRUD, assignment, busca, resolução
+// COM Redis cache nas listagens (sidebar) — reduz carga no Neon
 
 const { query, getClient } = require('../../config/database');
 const AppError = require('../../shared/AppError');
@@ -7,6 +8,29 @@ const { ERROS, STATUS_TICKET } = require('../../shared/constants');
 const { registrarAuditoria } = require('../../shared/audit');
 const { validarId, validarPaginacao } = require('../../shared/validators');
 const logger = require('../../shared/logger');
+const { cacheGet, cacheSet, cacheDel } = require('../../config/redis');
+
+// Prefixo de cache para listagens de tickets
+const CACHE_PREFIX = 'tickets:list:';
+const CACHE_TTL = 8; // 8 segundos — curto o suficiente pra ser "fresco", longo pra evitar 15 users batendo o mesmo
+
+/**
+ * Invalidar cache de todas as listagens de tickets
+ * Chamado após qualquer mudança de estado (aceitar, transferir, resolver, fechar)
+ */
+async function invalidarCacheListagens() {
+  try {
+    const { getRedis } = require('../../config/redis');
+    const redis = getRedis();
+    if (!redis) return;
+    const keys = await redis.keys(`${CACHE_PREFIX}*`);
+    if (keys.length > 0) {
+      await redis.del(...keys);
+    }
+  } catch (err) {
+    logger.error({ err: err.message }, '[Tickets] Erro ao invalidar cache');
+  }
+}
 
 /**
  * Listar tickets com filtros e paginação por cursor
@@ -17,6 +41,23 @@ const logger = require('../../shared/logger');
  *   - 'atividade': última mensagem mais recente primeiro
  */
 async function listarTickets({ cursor, limite = 50, status, filaId, usuarioId, busca, prioridade, ordem }) {
+  // Redis cache — só pra listagens da sidebar (sem cursor e sem busca)
+  const usarCache = !cursor && !busca;
+  if (usarCache) {
+    const cacheKey = `${CACHE_PREFIX}${status || 'all'}:${filaId || '0'}:${usuarioId || '0'}:${ordem || 'r'}:${limite}`;
+    const cached = await cacheGet(cacheKey);
+    if (cached) return cached;
+
+    // Executar query e cachear resultado
+    const resultado = await _executarQueryListagem({ cursor, limite, status, filaId, usuarioId, busca, prioridade, ordem });
+    await cacheSet(cacheKey, resultado, CACHE_TTL);
+    return resultado;
+  }
+
+  return _executarQueryListagem({ cursor, limite, status, filaId, usuarioId, busca, prioridade, ordem });
+}
+
+async function _executarQueryListagem({ cursor, limite = 50, status, filaId, usuarioId, busca, prioridade, ordem }) {
   const { cursor: cursorVal, limite: limiteVal } = validarPaginacao(cursor, limite);
 
   const condicoes = [];
@@ -217,6 +258,7 @@ async function criarParaContato({ contatoId, usuarioId, ip }) {
 
   logger.info({ ticketId, contatoId: cId, usuarioId: uId }, '[Tickets] Ticket criado para contato (sem mensagem)');
 
+  await invalidarCacheListagens();
   return obterTicketPorId(ticketId);
 }
 
@@ -280,6 +322,7 @@ async function atribuirTicket({ ticketId, usuarioId, adminId, ip }) {
 
     logger.info({ ticketId: tId, atendenteId: uId }, '[Tickets] Ticket atribuído');
 
+    await invalidarCacheListagens();
     return obterTicketPorId(tId);
   } catch (err) {
     await client.query('ROLLBACK');
@@ -364,6 +407,7 @@ async function transferirTicket({ ticketId, filaId, usuarioId, motivoTransferenc
       ip,
     });
 
+    await invalidarCacheListagens();
     return obterTicketPorId(tId);
   } catch (err) {
     await client.query('ROLLBACK');
@@ -410,6 +454,7 @@ async function resolverTicket({ ticketId, usuarioId, ip, motivoId, motivoTexto }
     ip,
   });
 
+  await invalidarCacheListagens();
   return obterTicketPorId(tId);
 }
 
@@ -438,6 +483,7 @@ async function fecharTicket({ ticketId, usuarioId, ip }) {
     ip,
   });
 
+  await invalidarCacheListagens();
   return obterTicketPorId(tId);
 }
 
@@ -477,6 +523,7 @@ async function atualizarTicket({ ticketId, dados, usuarioId, ip }) {
     ip,
   });
 
+  await invalidarCacheListagens();
   return obterTicketPorId(tId);
 }
 
@@ -497,6 +544,7 @@ async function marcarAguardando({ ticketId, usuarioId, ip }) {
     [tId, usuarioId]
   );
 
+  await invalidarCacheListagens();
   return obterTicketPorId(tId);
 }
 
@@ -591,6 +639,7 @@ module.exports = {
   marcarAguardando,
   obterContadores,
   criarParaContato,
+  invalidarCacheListagens,
   listarMotivos,
   listarMotivosAtivos,
   criarMotivo,
