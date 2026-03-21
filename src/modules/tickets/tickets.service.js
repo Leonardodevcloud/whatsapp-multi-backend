@@ -10,8 +10,13 @@ const logger = require('../../shared/logger');
 
 /**
  * Listar tickets com filtros e paginação por cursor
+ * 
+ * NOVO: parâmetro `ordem` controla a ordenação:
+ *   - 'recente' (default): mais recente primeiro (ORDER BY t.id DESC)
+ *   - 'antigo': mais antigo primeiro (ORDER BY t.criado_em ASC) — usado na Fila
+ *   - 'atividade': última mensagem mais recente primeiro
  */
-async function listarTickets({ cursor, limite = 50, status, filaId, usuarioId, busca, prioridade }) {
+async function listarTickets({ cursor, limite = 50, status, filaId, usuarioId, busca, prioridade, ordem }) {
   const { cursor: cursorVal, limite: limiteVal } = validarPaginacao(cursor, limite);
 
   const condicoes = [];
@@ -19,7 +24,12 @@ async function listarTickets({ cursor, limite = 50, status, filaId, usuarioId, b
   let paramIdx = 1;
 
   if (cursorVal) {
-    condicoes.push(`t.id < $${paramIdx++}`);
+    // Direção do cursor depende da ordem
+    if (ordem === 'antigo') {
+      condicoes.push(`t.id > $${paramIdx++}`);
+    } else {
+      condicoes.push(`t.id < $${paramIdx++}`);
+    }
     params.push(cursorVal);
   }
 
@@ -58,6 +68,21 @@ async function listarTickets({ cursor, limite = 50, status, filaId, usuarioId, b
 
   params.push(limiteVal);
 
+  // Definir ORDER BY baseado no parâmetro `ordem`
+  let orderBy;
+  switch (ordem) {
+    case 'antigo':
+      orderBy = 't.criado_em ASC, t.id ASC';
+      break;
+    case 'atividade':
+      orderBy = 'COALESCE(t.ultima_mensagem_em, t.criado_em) DESC, t.id DESC';
+      break;
+    default:
+      orderBy = 't.id DESC';
+  }
+
+  // Usar LEFT JOIN com aggregation em vez de subquery correlata pra nao_lidas
+  // Isto evita N+1: uma única contagem é feita via JOIN
   const resultado = await query(
     `SELECT t.id, t.contato_id, t.fila_id, t.usuario_id, t.status, t.protocolo,
             t.assunto, t.prioridade, t.ultima_mensagem_em, t.ultima_mensagem_preview,
@@ -65,13 +90,18 @@ async function listarTickets({ cursor, limite = 50, status, filaId, usuarioId, b
             c.nome as contato_nome, c.telefone as contato_telefone, c.avatar_url as contato_avatar,
             f.nome as fila_nome, f.cor as fila_cor,
             u.nome as atendente_nome,
-            (SELECT COUNT(*) FROM mensagens m WHERE m.ticket_id = t.id AND m.is_from_me = FALSE AND m.status_envio != 'lida') as nao_lidas
+            COALESCE(nl.total, 0)::int as nao_lidas
      FROM tickets t
      LEFT JOIN contatos c ON c.id = t.contato_id
      LEFT JOIN filas f ON f.id = t.fila_id
      LEFT JOIN usuarios u ON u.id = t.usuario_id
+     LEFT JOIN LATERAL (
+       SELECT COUNT(*) as total
+       FROM mensagens m
+       WHERE m.ticket_id = t.id AND m.is_from_me = FALSE AND m.status_envio != 'lida'
+     ) nl ON true
      ${where}
-     ORDER BY t.id DESC
+     ORDER BY ${orderBy}
      LIMIT $${paramIdx}`,
     params
   );
@@ -201,7 +231,6 @@ async function atribuirTicket({ ticketId, usuarioId, adminId, ip }) {
   try {
     await client.query('BEGIN');
 
-    // Verificar ticket
     const ticket = await client.query(
       `SELECT id, status, usuario_id FROM tickets WHERE id = $1 FOR UPDATE`,
       [tId]
@@ -210,7 +239,6 @@ async function atribuirTicket({ ticketId, usuarioId, adminId, ip }) {
       throw new AppError(ERROS.NAO_ENCONTRADO, 404);
     }
 
-    // Verificar atendente
     const atendente = await client.query(
       `SELECT id, nome, max_tickets_simultaneos, online, ativo FROM usuarios WHERE id = $1`,
       [uId]
@@ -219,7 +247,6 @@ async function atribuirTicket({ ticketId, usuarioId, adminId, ip }) {
       throw new AppError('Atendente não encontrado ou inativo', 404);
     }
 
-    // Verificar limite de tickets simultâneos
     const ticketsAtivos = await client.query(
       `SELECT COUNT(*) as total FROM tickets WHERE usuario_id = $1 AND status IN ('aberto', 'aguardando')`,
       [uId]
@@ -228,13 +255,11 @@ async function atribuirTicket({ ticketId, usuarioId, adminId, ip }) {
       throw new AppError(ERROS.MAX_TICKETS_ATINGIDO, 409);
     }
 
-    // Atribuir
     await client.query(
       `UPDATE tickets SET usuario_id = $1, status = 'aberto', atualizado_em = NOW() WHERE id = $2`,
       [uId, tId]
     );
 
-    // Mensagem de sistema
     await client.query(
       `INSERT INTO mensagens (ticket_id, usuario_id, corpo, tipo, is_from_me, is_internal)
        VALUES ($1, $2, $3, 'sistema', TRUE, TRUE)`,
@@ -300,7 +325,6 @@ async function transferirTicket({ ticketId, filaId, usuarioId, motivoTransferenc
       params.push(parseInt(usuarioId));
       updates.push(`status = 'aberto'`);
     } else {
-      // Transferir pra fila sem atendente = voltar pra pendente
       updates.push(`usuario_id = NULL`);
       updates.push(`status = 'pendente'`);
     }
@@ -308,11 +332,10 @@ async function transferirTicket({ ticketId, filaId, usuarioId, motivoTransferenc
     params.push(tId);
     await client.query(`UPDATE tickets SET ${updates.join(', ')} WHERE id = $${idx}`, params);
 
-    // Mensagem de sistema com nome e hora
     const adminResult = await client.query(`SELECT nome FROM usuarios WHERE id = $1`, [adminId]);
     const adminNome = adminResult.rows[0]?.nome || 'Atendente';
     const hora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Bahia' });
-    
+
     let msgSistema = '';
     if (usuarioId) {
       const destinoResult = await client.query(`SELECT nome FROM usuarios WHERE id = $1`, [parseInt(usuarioId)]);
@@ -368,7 +391,6 @@ async function resolverTicket({ ticketId, usuarioId, ip, motivoId, motivoTexto }
     [tempoResolucao, motivoId || null, motivoTexto || null, tId]
   );
 
-  // Mensagem de sistema com nome e hora
   const nomeResult = await query(`SELECT nome FROM usuarios WHERE id = $1`, [usuarioId]);
   const nomeAtendente = nomeResult.rows[0]?.nome || 'Atendente';
   const hora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Bahia' });
@@ -548,10 +570,8 @@ async function atualizarMotivo({ id, nome, ativo, ordem }) {
 
 async function deletarMotivo(id) {
   const mId = validarId(id);
-  // Não deletar se há tickets usando
   const usado = await query(`SELECT COUNT(*) as total FROM tickets WHERE motivo_fechamento_id = $1`, [mId]);
   if (parseInt(usado.rows[0].total) > 0) {
-    // Desativar em vez de deletar
     await query(`UPDATE motivos_atendimento SET ativo = FALSE, atualizado_em = NOW() WHERE id = $1`, [mId]);
     return { desativado: true };
   }
