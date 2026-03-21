@@ -1,5 +1,5 @@
 // src/modules/contacts/contacts.service.js
-// Serviço de contatos — CRUD, tags, busca com filtro grupo/individual
+// Serviço de contatos — CRUD, tags, busca com filtro grupo/individual, mídias
 
 const { query, getClient } = require('../../config/database');
 const AppError = require('../../shared/AppError');
@@ -128,6 +128,64 @@ async function obterHistoricoMensagens(contatoId, { limite = 200 }) {
 }
 
 /**
+ * Obter mídias e documentos de um contato (imagens, vídeos, documentos)
+ */
+async function obterMidiasContato(contatoId, { limite = 50, offset = 0, tipo } = {}) {
+  const id = validarId(contatoId);
+  const limiteVal = Math.min(parseInt(limite) || 50, 200);
+  const offsetVal = parseInt(offset) || 0;
+
+  const condicoes = [
+    `t.contato_id = $1`,
+    `m.media_url IS NOT NULL`,
+    `m.media_url != ''`,
+    `m.tipo IN ('imagem', 'video', 'documento', 'sticker')`,
+  ];
+  const params = [id];
+  let idx = 2;
+
+  // Filtrar por tipo específico se informado
+  if (tipo && ['imagem', 'video', 'documento'].includes(tipo)) {
+    condicoes.push(`m.tipo = $${idx}`);
+    params.push(tipo);
+    idx++;
+  }
+
+  const where = condicoes.join(' AND ');
+
+  // Contar total
+  const countResult = await query(
+    `SELECT COUNT(*) as total
+     FROM mensagens m
+     JOIN tickets t ON t.id = m.ticket_id
+     WHERE ${where}`,
+    params
+  );
+  const total = parseInt(countResult.rows[0]?.total || 0);
+
+  // Buscar mídias
+  params.push(limiteVal);
+  params.push(offsetVal);
+
+  const resultado = await query(
+    `SELECT m.id, m.tipo, m.media_url, m.media_tipo, m.media_nome, m.corpo,
+            m.criado_em, m.is_from_me, t.protocolo
+     FROM mensagens m
+     JOIN tickets t ON t.id = m.ticket_id
+     WHERE ${where}
+     ORDER BY m.criado_em DESC
+     LIMIT $${idx} OFFSET $${idx + 1}`,
+    params
+  );
+
+  return {
+    midias: resultado.rows,
+    total,
+    temMais: offsetVal + resultado.rows.length < total,
+  };
+}
+
+/**
  * Atualizar contato
  */
 async function atualizarContato({ contatoId, dados, usuarioId, ip }) {
@@ -197,6 +255,7 @@ module.exports = {
   listarContatos,
   obterContatoPorId,
   obterHistoricoMensagens,
+  obterMidiasContato,
   atualizarContato,
   adicionarTag,
   removerTag,
