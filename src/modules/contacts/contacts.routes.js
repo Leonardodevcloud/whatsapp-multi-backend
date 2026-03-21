@@ -69,6 +69,21 @@ router.get('/:id/historico', verificarToken, async (req, res, next) => {
   }
 });
 
+// GET /api/contacts/:id/midias — mídias e documentos do contato
+router.get('/:id/midias', verificarToken, async (req, res, next) => {
+  try {
+    const { limite, offset, tipo } = req.query;
+    const resultado = await contactsService.obterMidiasContato(req.params.id, {
+      limite: parseInt(limite) || 50,
+      offset: parseInt(offset) || 0,
+      tipo,
+    });
+    res.json(resultado);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // PATCH /api/contacts/:id
 router.patch('/:id', verificarToken, async (req, res, next) => {
   try {
