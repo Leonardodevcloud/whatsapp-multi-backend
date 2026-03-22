@@ -181,7 +181,7 @@ class WhatsAppConnection extends EventEmitter {
   async editarMensagem(messageId, phone, novoTexto) {
     this._verificarConectado();
     const resp = await fetch(`${this.baseUrl}/update-message`, {
-      method: 'PUT',
+      method: 'POST',
       headers: this.headers,
       body: JSON.stringify({ messageId, phone, message: novoTexto }),
     });
