@@ -633,14 +633,17 @@ async function _classificarTicketAuto(ticketId, textoMensagem) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        system_instruction: { parts: [{ text: `Você é um classificador de atendimentos via WhatsApp.
-Analise a mensagem do contato e classifique com a tag mais adequada.
+        system_instruction: { parts: [{ text: `Você é um classificador RIGOROSO de atendimentos via WhatsApp.
+Analise a mensagem do contato e classifique APENAS se tiver CERTEZA ABSOLUTA de que se encaixa numa tag.
 Tags disponíveis:
 ${regrasTexto}
 
-Se nenhuma tag se encaixa, retorne tag "null".
-Identifique também 2-3 palavras-chave novas da mensagem que deveriam ser adicionadas às regras.
-Responda APENAS em JSON: {"tag": "nome_da_tag", "palavras_novas": ["palavra1", "palavra2"]}` }] },
+REGRAS IMPORTANTES:
+- Se a mensagem NÃO se encaixa CLARAMENTE em nenhuma tag, retorne tag "null". Prefira "null" a classificar errado.
+- Só classifique se a confiança for >= 0.85 (muito alta).
+- A mensagem precisa estar DIRETAMENTE relacionada ao tema da tag, não apenas vagamente.
+- Se houver dúvida entre tags ou se não for claro, retorne "null".
+Responda APENAS em JSON: {"tag": "nome_da_tag", "confianca": 0.95, "palavras_novas": ["palavra1"]}` }] },
         contents: [{ parts: [{ text: `Mensagem do contato: "${textoMensagem}"` }] }],
         generationConfig: { temperature: 0.2, maxOutputTokens: 200, responseMimeType: 'application/json' },
       }),
@@ -661,6 +664,12 @@ Responda APENAS em JSON: {"tag": "nome_da_tag", "palavras_novas": ["palavra1", "
     } catch { return; }
 
     if (!resultado?.tag || resultado.tag === 'null') return;
+
+    // Exigir confiança alta (>= 0.85) pra evitar falsos positivos
+    if (resultado.confianca && resultado.confianca < 0.85) {
+      logger.info({ ticketId, tag: resultado.tag, confianca: resultado.confianca }, '[IA Auto] Confiança baixa, ignorando');
+      return;
+    }
 
     // Encontrar a regra correspondente
     const regraMatch = regras.rows.find(r => r.tag.toLowerCase() === resultado.tag.toLowerCase());
