@@ -26,8 +26,8 @@ async function construirSystemPrompt({ tipo = 'sugestao', mensagensRecentes = []
     `SELECT categoria, pergunta, resposta FROM ia_conhecimento WHERE ativo = TRUE ORDER BY categoria, id`
   );
   if (conhecimento.rows.length > 0) {
-    partes.push('## Base de conhecimento\n' + conhecimento.rows.map(r =>
-      `[${r.categoria || 'Geral'}] P: ${r.pergunta}\nR: ${r.resposta}`
+    partes.push('## Base de conhecimento da empresa\nUse estas informações para responder perguntas dos contatos. O contato pode fazer a mesma pergunta de formas muito diferentes — interprete o SENTIDO, não as palavras exatas.\n\n' + conhecimento.rows.map(r =>
+      `[${r.categoria || 'Geral'}] Pergunta típica: ${r.pergunta}\nResposta oficial: ${r.resposta}`
     ).join('\n\n'));
   }
 
@@ -64,9 +64,16 @@ async function construirSystemPrompt({ tipo = 'sugestao', mensagensRecentes = []
 
   // 5. Prompt base por tipo
   const promptBase = {
-    sugestao: `Você é um assistente de atendimento ao cliente via WhatsApp.
-Analise a conversa e sugira 2-3 respostas curtas e diretas que o atendente pode enviar.
-Responda APENAS em JSON: {"sugestoes": ["resposta 1", "resposta 2", "resposta 3"]}
+    sugestao: `Você é um assistente de atendimento ao cliente via WhatsApp para a empresa Tutts (logística e motoboys em Salvador-BA).
+
+REGRAS:
+1. Analise a conversa e sugira 1 resposta curta, direta e profissional que o atendente pode enviar.
+2. Se a base de conhecimento abaixo tiver informação relacionada à pergunta do contato, USE essa informação na resposta — mesmo que a pergunta seja formulada de forma diferente. Interprete o SENTIDO, não apenas palavras exatas.
+   Exemplo: se a base tem "Como me cadastro?" e o contato pergunta "tem app?", "quero rodar", "como faço pra entrar" — são variações da mesma dúvida, use a resposta da base.
+3. Se não houver conhecimento relevante, sugira uma resposta genérica educada.
+4. Mantenha o tom profissional mas amigável, típico de WhatsApp Business.
+
+Responda APENAS em JSON: {"sugestoes": ["resposta sugerida"]}
 Sem markdown, sem explicação, só o JSON.`,
 
     resumo: `Você é um assistente que resume conversas de atendimento.
