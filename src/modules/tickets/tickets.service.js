@@ -431,7 +431,7 @@ async function resolverTicket({ ticketId, usuarioId, ip, motivoId, motivoTexto }
   );
 
   await query(
-    `UPDATE tickets SET status = 'resolvido', tempo_resolucao_seg = $1, motivo_fechamento_id = $2, motivo_fechamento_texto = $3, atualizado_em = NOW() WHERE id = $4`,
+    `UPDATE tickets SET status = 'resolvido', tempo_resolucao_seg = $1, motivo_fechamento_id = $2, motivo_fechamento_texto = $3, assunto = NULL, assunto_cor = NULL, atualizado_em = NOW() WHERE id = $4`,
     [tempoResolucao, motivoId || null, motivoTexto || null, tId]
   );
 

@@ -343,7 +343,7 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
       ticketId = ticketResult.rows[0].id;
       if (ticketResult.rows[0].status === 'resolvido' && !fromMe) {
         await client.query(
-          `UPDATE tickets SET status = 'pendente', usuario_id = NULL, atualizado_em = NOW() WHERE id = $1`,
+          `UPDATE tickets SET status = 'pendente', usuario_id = NULL, assunto = NULL, assunto_cor = NULL, atualizado_em = NOW() WHERE id = $1`,
           [ticketId]
         );
       }
