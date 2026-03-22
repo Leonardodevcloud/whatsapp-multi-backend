@@ -126,7 +126,7 @@ router.get('/foto-perfil/:telefone', verificarToken, async (req, res) => {
 // POST /api/whatsapp/enviar-contato — enviar vCard
 router.post('/enviar-contato', verificarToken, limiteSensivel, async (req, res, next) => {
   try {
-    const { ticket_id, contact_name, contact_phone } = req.body;
+    const { ticket_id, contact_name, contact_phone, avatar_url } = req.body;
     if (!ticket_id || !contact_name || !contact_phone) {
       return res.status(400).json({ erro: 'ticket_id, contact_name e contact_phone são obrigatórios' });
     }
@@ -135,6 +135,7 @@ router.post('/enviar-contato', verificarToken, limiteSensivel, async (req, res, 
       ticketId: ticket_id,
       contactName: contact_name,
       contactPhone: contact_phone,
+      avatarUrl: avatar_url || null,
       usuarioId: req.usuario.id,
     });
 

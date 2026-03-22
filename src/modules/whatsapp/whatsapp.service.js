@@ -920,18 +920,18 @@ async function editarMensagem({ mensagemId, novoTexto, usuarioId }) {
 /**
  * Enviar contato (vCard) via Z-API
  */
-async function enviarContato({ ticketId, contactName, contactPhone, usuarioId }) {
+async function enviarContato({ ticketId, contactName, contactPhone, avatarUrl, usuarioId }) {
   const destino = await _obterDestinoDoTicket(ticketId);
   const telefoneContato = contactPhone.replace(/\D/g, '');
 
   await conexaoWA.enviarContato(destino, contactName, telefoneContato);
 
-  // Salvar no banco
+  // Salvar no banco — avatar vai no media_url
   const msgResult = await query(
-    `INSERT INTO mensagens (ticket_id, usuario_id, corpo, tipo, wa_message_id, is_from_me, status_envio)
-     VALUES ($1, $2, $3, 'contato', $4, TRUE, 'enviada')
-     RETURNING id, corpo, tipo, is_from_me, status_envio, criado_em`,
-    [ticketId, usuarioId, `👤 ${contactName}`, `vcard-${Date.now()}`]
+    `INSERT INTO mensagens (ticket_id, usuario_id, corpo, tipo, wa_message_id, is_from_me, status_envio, media_url)
+     VALUES ($1, $2, $3, 'contato', $4, TRUE, 'enviada', $5)
+     RETURNING id, corpo, tipo, is_from_me, status_envio, criado_em, media_url`,
+    [ticketId, usuarioId, `👤 ${contactName}`, `vcard-${Date.now()}`, avatarUrl || null]
   );
 
   await query(
