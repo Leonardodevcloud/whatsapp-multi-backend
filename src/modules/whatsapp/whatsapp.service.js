@@ -596,7 +596,7 @@ async function buscarFotoPerfil(telefone) {
 async function _classificarTicketAuto(ticketId, textoMensagem) {
   try {
     const textoLimpo = (textoMensagem || '').trim().toLowerCase();
-    if (textoLimpo.length < 8) return;
+    if (textoLimpo.length < 4) return;
 
     // Se o ticket JÁ tem tag, não sobrescrever até finalizar
     const ticketAtual = await query(`SELECT assunto FROM tickets WHERE id = $1`, [ticketId]);
