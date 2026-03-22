@@ -26,6 +26,54 @@ router.get('/status', verificarToken, (req, res) => {
   res.json(whatsappService.obterStatus());
 });
 
+// GET /api/whatsapp/perfil — busca foto, nome e número do WhatsApp conectado via Z-API
+router.get('/perfil', verificarToken, async (req, res) => {
+  try {
+    const conexao = whatsappService.obterConexao();
+    if (!conexao?.instanceId || !conexao?.token) {
+      return res.json({ numero: null, nome: null, foto: null });
+    }
+    const base = `https://api.z-api.io/instances/${conexao.instanceId}/token/${conexao.token}`;
+    const headers = conexao.securityToken ? { 'Client-Token': conexao.securityToken } : {};
+
+    // Buscar número conectado
+    let numero = null;
+    try {
+      const phoneResp = await fetch(`${base}/phone`, { headers });
+      if (phoneResp.ok) {
+        const phoneData = await phoneResp.json();
+        numero = phoneData.phone || phoneData.value || null;
+      }
+    } catch {}
+
+    // Buscar foto do perfil
+    let foto = null;
+    let nome = null;
+    if (numero) {
+      try {
+        const picResp = await fetch(`${base}/profile-picture/${numero}`, { headers });
+        if (picResp.ok) {
+          const picData = await picResp.json();
+          foto = picData.link || picData.profilePicThumbObj?.img || null;
+        }
+      } catch {}
+
+      // Buscar nome do perfil
+      try {
+        const nameResp = await fetch(`${base}/contacts/${numero}`, { headers });
+        if (nameResp.ok) {
+          const nameData = await nameResp.json();
+          nome = nameData.name || nameData.notify || nameData.pushname || null;
+        }
+      } catch {}
+    }
+
+    res.json({ numero, nome, foto });
+  } catch (err) {
+    res.json({ numero: null, nome: null, foto: null });
+  }
+});
+
 // GET /api/whatsapp/qr
 router.get('/qr', verificarToken, (req, res) => {
   res.json({ qr: null, mensagem: 'Z-API gerencia o QR Code pelo painel em z-api.io.' });

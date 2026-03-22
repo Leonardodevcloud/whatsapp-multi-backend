@@ -716,6 +716,7 @@ async function _resolverMencoesLid(client, texto) {
 
 function obterQrCode() { return null; }
 function obterStatus() { return conexaoWA.obterStatus(); }
+function obterConexao() { return { instanceId: conexaoWA.instanceId, token: conexaoWA.token, securityToken: conexaoWA.securityToken }; }
 async function reconectar() { await conexaoWA.desconectar(); await conexaoWA.conectar(); }
 async function forcarLogout() { await conexaoWA.desconectar(); }
 
@@ -1041,5 +1042,5 @@ module.exports = {
   editarMensagem, enviarContato, marcarLidaNoWhatsApp,
   listarStickersGaleria, listarStickersRecebidos,
   mapearLidsContatos,
-  obterQrCode, obterStatus, reconectar, forcarLogout,
+  obterQrCode, obterStatus, obterConexao, reconectar, forcarLogout,
 };
