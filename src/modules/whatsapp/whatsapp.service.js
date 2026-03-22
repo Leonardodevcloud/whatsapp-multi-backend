@@ -595,11 +595,17 @@ async function buscarFotoPerfil(telefone) {
  */
 async function _classificarTicketAuto(ticketId, textoMensagem) {
   try {
+    // Ignorar mensagens curtas, saudações e genéricas
+    const textoLimpo = textoMensagem.trim().toLowerCase();
+    if (textoLimpo.length < 8) return; // "bom dia" = 7 chars, ignorar
+
+    const SAUDACOES = ['bom dia', 'boa tarde', 'boa noite', 'oi', 'olá', 'ola', 'hey', 'eae', 'eai',
+      'tudo bem', 'tudo bom', 'como vai', 'opa', 'fala', 'alô', 'alo', 'oie', 'oii', 'oiii'];
+    if (SAUDACOES.some(s => textoLimpo === s || textoLimpo === s + '!' || textoLimpo === s + '?')) return;
+
     // Buscar regras ativas
     const regras = await query(`SELECT id, tag, palavras_chave, descricao FROM ia_tags_regras WHERE ativo = TRUE`);
     if (regras.rows.length === 0) return;
-
-    const textoLower = textoMensagem.toLowerCase();
 
     // ---- CAMADA 1: Match por palavras-chave (instantâneo, sem custo) ----
     let melhorMatch = null;
@@ -607,7 +613,7 @@ async function _classificarTicketAuto(ticketId, textoMensagem) {
 
     for (const regra of regras.rows) {
       const palavras = regra.palavras_chave.split(',').map(p => p.trim().toLowerCase()).filter(Boolean);
-      const hits = palavras.filter(p => textoLower.includes(p)).length;
+      const hits = palavras.filter(p => textoLimpo.includes(p)).length;
       if (hits > maxHits) {
         maxHits = hits;
         melhorMatch = regra;
@@ -619,7 +625,8 @@ async function _classificarTicketAuto(ticketId, textoMensagem) {
       return;
     }
 
-    // ---- CAMADA 2: Gemini IA (fallback — entende sinônimos e contexto) ----
+    // ---- CAMADA 2: Gemini IA — só pra mensagens longas (>= 15 chars) ----
+    if (textoLimpo.length < 15) return; // mensagens curtas demais não vão pra IA
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) return;
 
@@ -680,35 +687,9 @@ Responda APENAS em JSON: {"tag": "nome_da_tag", "confianca": 0.95, "palavras_nov
     // Aplicar tag
     await _aplicarTagNoTicket(ticketId, regraMatch, 'gemini');
 
-    // ---- AUTO-APRENDIZADO: adicionar palavras novas às keywords da regra ----
+    // ---- AUTO-APRENDIZADO: apenas log por agora, não adiciona automaticamente ----
     if (resultado.palavras_novas?.length > 0) {
-      // Stopwords — palavras comuns que nunca devem virar keyword
-      const STOPWORDS = new Set([
-        'cadê', 'cade', 'quero', 'queria', 'preciso', 'gostaria', 'pode', 'consegue',
-        'como', 'onde', 'quando', 'qual', 'quem', 'porque', 'porquê',
-        'fazer', 'tenho', 'meu', 'minha', 'meus', 'minhas', 'seu', 'sua',
-        'aqui', 'ali', 'lá', 'isso', 'este', 'esta', 'esse', 'essa',
-        'para', 'pra', 'pro', 'com', 'sem', 'por', 'mais', 'menos',
-        'muito', 'pouco', 'todo', 'toda', 'todos', 'todas',
-        'não', 'nao', 'sim', 'talvez', 'ainda', 'já', 'agora',
-        'bom', 'boa', 'dia', 'boa', 'tarde', 'noite', 'olá', 'ola', 'oi',
-        'obrigado', 'obrigada', 'por favor', 'favor', 'ajuda', 'ajudar',
-        'sobre', 'saber', 'informação', 'informações', 'info',
-        'está', 'estou', 'era', 'ser', 'foi', 'tem', 'ter', 'vai', 'vou',
-        'uma', 'uns', 'umas', 'dos', 'das', 'nos', 'nas', 'num', 'numa',
-        'the', 'and', 'for', 'that', 'this', 'with',
-      ]);
-
-      const keywordsAtuais = regraMatch.palavras_chave.split(',').map(p => p.trim().toLowerCase());
-      const novas = resultado.palavras_novas
-        .map(p => p.toLowerCase().trim())
-        .filter(p => p.length >= 4 && !keywordsAtuais.includes(p) && !STOPWORDS.has(p));
-
-      if (novas.length > 0) {
-        const keywordsAtualizado = regraMatch.palavras_chave + ', ' + novas.join(', ');
-        await query(`UPDATE ia_tags_regras SET palavras_chave = $1 WHERE id = $2`, [keywordsAtualizado, regraMatch.id]);
-        logger.info({ tag: regraMatch.tag, novas }, '[IA Auto] Palavras-chave aprendidas');
-      }
+      logger.info({ tag: regraMatch.tag, palavras_sugeridas: resultado.palavras_novas }, '[IA Auto] Palavras sugeridas (não adicionadas)');
     }
   } catch (err) {
     logger.error({ err: err.message, ticketId }, '[IA Auto] Erro na classificação');
