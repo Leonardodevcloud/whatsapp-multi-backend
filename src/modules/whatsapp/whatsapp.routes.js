@@ -147,12 +147,19 @@ router.post('/enviar-contato', verificarToken, limiteSensivel, async (req, res, 
   }
 });
 
-// POST /api/whatsapp/marcar-lida — blue ticks pro contato
+// POST /api/whatsapp/marcar-lida — blue ticks pro contato + marca lida no banco
 router.post('/marcar-lida', verificarToken, async (req, res) => {
   try {
     const { ticket_id } = req.body;
     if (!ticket_id) return res.status(400).json({ erro: 'ticket_id é obrigatório' });
+
+    // Marcar lida no WhatsApp (blue ticks)
     await whatsappService.marcarLidaNoWhatsApp(ticket_id);
+
+    // Marcar lida no banco (remove badge de não lidas)
+    const { marcarComoLidas } = require('../messages/messages.service');
+    await marcarComoLidas({ ticketId: ticket_id, usuarioId: req.usuario.id });
+
     res.json({ sucesso: true });
   } catch {
     res.json({ sucesso: false });
