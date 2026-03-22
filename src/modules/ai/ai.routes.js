@@ -39,7 +39,8 @@ router.post('/melhorar-texto', verificarToken, async (req, res, next) => {
     const { texto } = req.body;
     if (!texto?.trim()) return res.status(400).json({ erro: 'texto é obrigatório' });
     const resultado = await ia.melhorarTexto(texto.trim());
-    res.json(resultado);
+    // Frontend espera camelCase
+    res.json({ textoMelhorado: resultado?.texto_melhorado || resultado?.textoMelhorado || texto.trim() });
   } catch (err) { next(err); }
 });
 
