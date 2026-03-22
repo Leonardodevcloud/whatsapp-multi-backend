@@ -680,10 +680,27 @@ Responda APENAS em JSON: {"tag": "nome_da_tag", "confianca": 0.95, "palavras_nov
 
     // ---- AUTO-APRENDIZADO: adicionar palavras novas às keywords da regra ----
     if (resultado.palavras_novas?.length > 0) {
+      // Stopwords — palavras comuns que nunca devem virar keyword
+      const STOPWORDS = new Set([
+        'cadê', 'cade', 'quero', 'queria', 'preciso', 'gostaria', 'pode', 'consegue',
+        'como', 'onde', 'quando', 'qual', 'quem', 'porque', 'porquê',
+        'fazer', 'tenho', 'meu', 'minha', 'meus', 'minhas', 'seu', 'sua',
+        'aqui', 'ali', 'lá', 'isso', 'este', 'esta', 'esse', 'essa',
+        'para', 'pra', 'pro', 'com', 'sem', 'por', 'mais', 'menos',
+        'muito', 'pouco', 'todo', 'toda', 'todos', 'todas',
+        'não', 'nao', 'sim', 'talvez', 'ainda', 'já', 'agora',
+        'bom', 'boa', 'dia', 'boa', 'tarde', 'noite', 'olá', 'ola', 'oi',
+        'obrigado', 'obrigada', 'por favor', 'favor', 'ajuda', 'ajudar',
+        'sobre', 'saber', 'informação', 'informações', 'info',
+        'está', 'estou', 'era', 'ser', 'foi', 'tem', 'ter', 'vai', 'vou',
+        'uma', 'uns', 'umas', 'dos', 'das', 'nos', 'nas', 'num', 'numa',
+        'the', 'and', 'for', 'that', 'this', 'with',
+      ]);
+
       const keywordsAtuais = regraMatch.palavras_chave.split(',').map(p => p.trim().toLowerCase());
       const novas = resultado.palavras_novas
         .map(p => p.toLowerCase().trim())
-        .filter(p => p.length >= 3 && !keywordsAtuais.includes(p));
+        .filter(p => p.length >= 4 && !keywordsAtuais.includes(p) && !STOPWORDS.has(p));
 
       if (novas.length > 0) {
         const keywordsAtualizado = regraMatch.palavras_chave + ', ' + novas.join(', ');
