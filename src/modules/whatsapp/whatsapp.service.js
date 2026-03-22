@@ -590,125 +590,52 @@ async function buscarFotoPerfil(telefone) {
 
 // Obter destino pra envio — prioriza lid (Z-API aceita @lid)
 /**
- * Auto-classificar ticket por palavras-chave (sem API call — instantâneo)
- * Verifica ia_tags_regras e atribui a tag se encontrar match
+ * Auto-classificar ticket — APENAS por palavras-chave. Sem IA.
+ * Rápido, previsível, zero falso positivo.
  */
 async function _classificarTicketAuto(ticketId, textoMensagem) {
   try {
-    // Ignorar mensagens curtas, saudações e genéricas
-    const textoLimpo = textoMensagem.trim().toLowerCase();
-    if (textoLimpo.length < 8) return; // "bom dia" = 7 chars, ignorar
-
-    const SAUDACOES = ['bom dia', 'boa tarde', 'boa noite', 'oi', 'olá', 'ola', 'hey', 'eae', 'eai',
-      'tudo bem', 'tudo bom', 'como vai', 'opa', 'fala', 'alô', 'alo', 'oie', 'oii', 'oiii'];
-    if (SAUDACOES.some(s => textoLimpo === s || textoLimpo === s + '!' || textoLimpo === s + '?')) return;
+    const textoLimpo = (textoMensagem || '').trim().toLowerCase();
+    if (textoLimpo.length < 8) return;
 
     // Buscar regras ativas
-    const regras = await query(`SELECT id, tag, palavras_chave, descricao FROM ia_tags_regras WHERE ativo = TRUE`);
+    const regras = await query(`SELECT id, tag, palavras_chave FROM ia_tags_regras WHERE ativo = TRUE`);
     if (regras.rows.length === 0) return;
 
-    // ---- CAMADA 1: Match por palavras-chave (instantâneo, sem custo) ----
+    // Tokenizar texto (palavras individuais)
+    const palavrasTexto = textoLimpo.replace(/[^a-záàâãéèêíïóôõöúçñ\s]/gi, '').split(/\s+/).filter(p => p.length >= 3);
+
     let melhorMatch = null;
     let maxHits = 0;
 
     for (const regra of regras.rows) {
-      const palavras = regra.palavras_chave.split(',').map(p => p.trim().toLowerCase()).filter(Boolean);
-      const hits = palavras.filter(p => textoLimpo.includes(p)).length;
+      const keywords = regra.palavras_chave.split(',').map(p => p.trim().toLowerCase()).filter(Boolean);
+      // Contar quantas keywords aparecem como palavras inteiras no texto
+      const hits = keywords.filter(kw => palavrasTexto.includes(kw) || textoLimpo.includes(kw)).length;
       if (hits > maxHits) {
         maxHits = hits;
         melhorMatch = regra;
       }
     }
 
-    if (melhorMatch && maxHits > 0) {
-      await _aplicarTagNoTicket(ticketId, melhorMatch, 'keyword');
-      return;
-    }
-
-    // ---- CAMADA 2: Gemini IA — só pra mensagens longas (>= 15 chars) ----
-    if (textoLimpo.length < 15) return; // mensagens curtas demais não vão pra IA
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) return;
-
-    const regrasTexto = regras.rows.map(r =>
-      `- ${r.tag}: ${r.descricao || ''} (palavras-chave: ${r.palavras_chave})`
-    ).join('\n');
-
-    const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
-
-    const resp = await fetch(`${GEMINI_API}?key=${apiKey}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        system_instruction: { parts: [{ text: `Você é um classificador de atendimentos via WhatsApp. Sua função é decidir se uma mensagem se encaixa em alguma das tags abaixo.
-
-Tags disponíveis:
-${regrasTexto}
-
-REGRAS OBRIGATÓRIAS:
-1. Se a mensagem NÃO fala DIRETAMENTE sobre o tema específico de alguma tag, retorne SEMPRE {"tag": null, "confianca": 0, "palavras_novas": []}.
-2. Mensagens genéricas, saudações, perguntas sobre outros assuntos, assuntos pessoais, ou qualquer coisa que não seja EXPLICITAMENTE sobre os temas das tags = retorne null.
-3. Só classifique se a mensagem mencionar EXPLICITAMENTE o assunto da tag (ex: dinheiro, pagamento, saque para tag Financeiro).
-4. "Quero meu cachorro", "Cadê o cabelo?", "Bom dia", "Oi" = SEMPRE null.
-5. Na dúvida, retorne null. É melhor não classificar do que classificar errado.
-
-Responda APENAS em JSON: {"tag": "nome_da_tag", "confianca": 0.95, "palavras_novas": ["palavra1"]}` }] },
-        contents: [{ parts: [{ text: `Mensagem do contato: "${textoMensagem}"` }] }],
-        generationConfig: { temperature: 0.1, maxOutputTokens: 200, responseMimeType: 'application/json' },
-      }),
-    });
-
-    if (!resp.ok) {
-      logger.error({ status: resp.status }, '[IA Auto] Erro Gemini classificação');
-      return;
-    }
-
-    const data = await resp.json();
-    const texto = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-
-    let resultado;
-    try {
-      const jsonMatch = texto.match(/\{[\s\S]*\}/);
-      resultado = jsonMatch ? JSON.parse(jsonMatch[0]) : null;
-    } catch { return; }
-
-    if (!resultado?.tag || resultado.tag === 'null') return;
-
-    // Exigir confiança alta (>= 0.85) pra evitar falsos positivos
-    if (resultado.confianca && resultado.confianca < 0.85) {
-      logger.info({ ticketId, tag: resultado.tag, confianca: resultado.confianca }, '[IA Auto] Confiança baixa, ignorando');
-      return;
-    }
-
-    // Encontrar a regra correspondente
-    const regraMatch = regras.rows.find(r => r.tag.toLowerCase() === resultado.tag.toLowerCase());
-    if (!regraMatch) return;
+    if (!melhorMatch || maxHits === 0) return;
 
     // Aplicar tag
-    await _aplicarTagNoTicket(ticketId, regraMatch, 'gemini');
+    await query(`UPDATE tickets SET assunto = $1, atualizado_em = NOW() WHERE id = $2`, [melhorMatch.tag, ticketId]);
+    await query(`UPDATE ia_tags_regras SET acertos = acertos + 1 WHERE id = $1`, [melhorMatch.id]);
 
-    // ---- AUTO-APRENDIZADO: apenas log por agora, não adiciona automaticamente ----
-    if (resultado.palavras_novas?.length > 0) {
-      logger.info({ tag: regraMatch.tag, palavras_sugeridas: resultado.palavras_novas }, '[IA Auto] Palavras sugeridas (não adicionadas)');
-    }
+    try {
+      const { invalidarCacheListagens } = require('../tickets/tickets.service');
+      await invalidarCacheListagens();
+    } catch (_) {}
+
+    const { broadcast } = require('../../websocket');
+    broadcast('ticket:atualizado', { ticketId, assunto: melhorMatch.tag });
+
+    logger.info({ ticketId, tag: melhorMatch.tag, hits: maxHits }, '[IA Auto] Ticket classificado por keyword');
   } catch (err) {
     logger.error({ err: err.message, ticketId }, '[IA Auto] Erro na classificação');
   }
-}
-
-async function _aplicarTagNoTicket(ticketId, regra, metodo) {
-  await query(`UPDATE tickets SET assunto = $1, atualizado_em = NOW() WHERE id = $2`, [regra.tag, ticketId]);
-  await query(`UPDATE ia_tags_regras SET acertos = acertos + 1 WHERE id = $1`, [regra.id]);
-
-  try {
-    const { invalidarCacheListagens } = require('../tickets/tickets.service');
-    await invalidarCacheListagens();
-  } catch (_) {}
-
-  const { broadcast } = require('../../websocket');
-  broadcast('ticket:atualizado', { ticketId, assunto: regra.tag });
-
-  logger.info({ ticketId, tag: regra.tag, metodo }, '[IA Auto] Ticket classificado');
 }
 
 async function _obterDestinoDoTicket(ticketId) {
