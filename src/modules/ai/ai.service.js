@@ -518,19 +518,199 @@ async function obterStats() {
 }
 
 module.exports = {
-  // IA calls
   sugerirResposta, resumirTicket, classificarTicket, melhorarTexto, analisarSentimento,
   registrarFeedback, construirSystemPrompt,
-  // Cron
   aprenderDeTicketsFechados,
-  // CRUD instrucoes
   listarInstrucoes, criarInstrucao, atualizarInstrucao, deletarInstrucao,
-  // CRUD conhecimento
   listarConhecimento, criarConhecimento, atualizarConhecimento, deletarConhecimento,
-  // CRUD exemplos
   listarExemplos, aprovarExemplo, deletarExemplo,
-  // CRUD tags regras
   listarTagsRegras, criarTagRegra, atualizarTagRegra, deletarTagRegra,
-  // Stats
   obterStats,
+  // Novos
+  getIaConfig, setIaConfig,
+  detectarUrgencia,
+  respostaAutomaticaInteligente,
+  gerarResumoDiario,
 };
+
+// ============================================================
+// CONFIG — toggles da IA
+// ============================================================
+
+async function getIaConfig() {
+  await query(`CREATE TABLE IF NOT EXISTS ia_config (chave VARCHAR(100) PRIMARY KEY, valor VARCHAR(500) NOT NULL DEFAULT 'false', descricao VARCHAR(300), atualizado_em TIMESTAMPTZ DEFAULT NOW())`);
+  const result = await query(`SELECT * FROM ia_config ORDER BY chave`);
+  const config = {};
+  for (const r of result.rows) config[r.chave] = r.valor;
+  return config;
+}
+
+async function setIaConfig(chave, valor) {
+  await query(`INSERT INTO ia_config (chave, valor, atualizado_em) VALUES ($1, $2, NOW()) ON CONFLICT (chave) DO UPDATE SET valor = $2, atualizado_em = NOW()`, [chave, valor]);
+}
+
+async function _getConfig(chave) {
+  try {
+    const r = await query(`SELECT valor FROM ia_config WHERE chave = $1`, [chave]);
+    return r.rows[0]?.valor || 'false';
+  } catch { return 'false'; }
+}
+
+// ============================================================
+// DETECÇÃO DE URGÊNCIA
+// ============================================================
+
+const PALAVRAS_URGENTES = [
+  'urgente', 'urgência', 'emergência', 'emergencial', 'travou', 'parou',
+  'não funciona', 'caiu', 'socorro', 'processo', 'judicial', 'multa',
+  'prazo hoje', 'vence hoje', 'preciso agora', 'imediato', 'crítico',
+  'bloqueado', 'perdi', 'perdendo', 'prejuízo', 'risco',
+];
+
+async function detectarUrgencia(ticketId, textoMensagem) {
+  try {
+    const cfg = await _getConfig('detectar_urgencia');
+    if (cfg !== 'true') return false;
+
+    const texto = textoMensagem.toLowerCase();
+    const ehUrgente = PALAVRAS_URGENTES.some(p => texto.includes(p));
+    if (!ehUrgente) return false;
+
+    // Marcar ticket como prioridade alta
+    await query(`UPDATE tickets SET prioridade = 'alta', atualizado_em = NOW() WHERE id = $1 AND (prioridade IS NULL OR prioridade != 'alta')`, [ticketId]);
+
+    // Broadcast pra supervisão
+    try {
+      const { broadcast } = require('../../websocket');
+      broadcast('ticket:urgente', { ticketId, motivo: PALAVRAS_URGENTES.find(p => texto.includes(p)) });
+    } catch {}
+
+    logger.info({ ticketId }, '[IA] Urgência detectada');
+    return true;
+  } catch (err) {
+    logger.error({ err: err.message }, '[IA] Erro na detecção de urgência');
+    return false;
+  }
+}
+
+// ============================================================
+// RESPOSTA AUTOMÁTICA INTELIGENTE
+// ============================================================
+
+async function respostaAutomaticaInteligente(ticketId, textoMensagem, isGroup) {
+  try {
+    const cfg = await _getConfig('auto_resposta_ativa');
+    if (cfg !== 'true') return null;
+
+    if (isGroup) {
+      const cfgGrupo = await _getConfig('auto_resposta_grupos');
+      if (cfgGrupo !== 'true') return null;
+    }
+
+    if (textoMensagem.length < 5) return null;
+
+    // Checar se já respondeu automaticamente neste ticket nas últimas 2h
+    const jaRespondeu = await query(
+      `SELECT id FROM mensagens WHERE ticket_id = $1 AND is_from_me = TRUE AND corpo LIKE '%🤖%Resposta automática%' AND criado_em > NOW() - INTERVAL '2 hours'`,
+      [ticketId]
+    );
+    if (jaRespondeu.rows.length > 0) return null;
+
+    // Se ticket já tem atendente, não responder auto
+    const ticket = await query(`SELECT usuario_id, status FROM tickets WHERE id = $1`, [ticketId]);
+    if (ticket.rows[0]?.usuario_id && ticket.rows[0]?.status === 'aberto') return null;
+
+    const conhecimento = await query(`SELECT pergunta, resposta, categoria FROM ia_conhecimento WHERE ativo = TRUE`);
+    if (conhecimento.rows.length === 0) return null;
+
+    const baseTexto = conhecimento.rows.map(r => `[${r.categoria || 'Geral'}] P: ${r.pergunta}\nR: ${r.resposta}`).join('\n\n');
+
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return null;
+
+    const resp = await fetch(`${GEMINI_API}?key=${apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        system_instruction: { parts: [{ text: `Você é um assistente de atendimento. Analise a pergunta do contato e veja se a base de conhecimento tem informação relevante.
+Interprete o SENTIDO da pergunta, não as palavras exatas.
+Se tiver resposta com ALTA CONFIANÇA (90%+), responda: {"confianca": 0.95, "resposta": "texto curto e direto"}
+Se NÃO tiver certeza ou a pergunta for ambígua, responda: {"confianca": 0.0, "resposta": ""}
+NUNCA invente informação. Se não souber, confiança = 0.
+
+Base de conhecimento:
+${baseTexto}` }] },
+        contents: [{ parts: [{ text: `Pergunta do contato: "${textoMensagem}"` }] }],
+        generationConfig: { temperature: 0.1, maxOutputTokens: 300, responseMimeType: 'application/json' },
+      }),
+    });
+
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const texto = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    const match = texto.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+
+    const resultado = JSON.parse(match[0]);
+    if (!resultado.resposta || resultado.confianca < 0.9) return null;
+
+    logger.info({ ticketId, confianca: resultado.confianca }, '[IA] Resposta automática inteligente');
+    return `🤖 *Resposta automática:*\n${resultado.resposta}\n\n_Se precisar falar com um atendente, basta responder esta mensagem._`;
+  } catch (err) {
+    logger.error({ err: err.message }, '[IA] Erro na resposta automática');
+    return null;
+  }
+}
+
+// ============================================================
+// RESUMO DIÁRIO
+// ============================================================
+
+async function gerarResumoDiario() {
+  try {
+    const cfg = await _getConfig('resumo_diario');
+    if (cfg !== 'true') return null;
+
+    const telefone = (await _getConfig('resumo_diario_telefone'))?.trim();
+    if (!telefone) { logger.warn('[IA] Resumo diário: telefone não configurado'); return null; }
+
+    // Buscar métricas do dia
+    const metricas = await query(`
+      SELECT
+        COUNT(*) as total,
+        COUNT(*) FILTER (WHERE status = 'resolvido' AND DATE(atualizado_em) = CURRENT_DATE) as resolvidos,
+        COUNT(*) FILTER (WHERE status = 'pendente') as pendentes,
+        COUNT(*) FILTER (WHERE status = 'aberto') as abertos,
+        ROUND(AVG(tempo_primeira_resposta_seg) FILTER (WHERE DATE(criado_em) = CURRENT_DATE AND tempo_primeira_resposta_seg IS NOT NULL)) as tpr_medio,
+        ROUND(AVG(tempo_resolucao_seg) FILTER (WHERE DATE(atualizado_em) = CURRENT_DATE AND tempo_resolucao_seg IS NOT NULL)) as tma_medio
+      FROM tickets WHERE DATE(criado_em) = CURRENT_DATE OR status IN ('pendente', 'aberto')
+    `);
+
+    const top = await query(`
+      SELECT u.nome, COUNT(t.id) as total
+      FROM tickets t JOIN usuarios u ON u.id = t.usuario_id
+      WHERE DATE(t.criado_em) = CURRENT_DATE AND t.status = 'resolvido'
+      GROUP BY u.nome ORDER BY total DESC LIMIT 3
+    `);
+
+    const m = metricas.rows[0] || {};
+    const fmt = (s) => { if (!s) return '—'; if (s < 60) return `${s}s`; if (s < 3600) return `${Math.floor(s / 60)}min`; return `${Math.floor(s / 3600)}h${Math.floor((s % 3600) / 60)}m`; };
+
+    const ranking = top.rows.map((r, i) => `${['🥇','🥈','🥉'][i]} ${r.nome}: ${r.total}`).join('\n') || 'Sem dados';
+
+    const resumo = `📊 *Resumo do dia — ${new Date().toLocaleDateString('pt-BR')}*\n\n` +
+      `📥 Chamados hoje: *${m.total || 0}*\n` +
+      `✅ Resolvidos: *${m.resolvidos || 0}*\n` +
+      `⏳ Pendentes: *${m.pendentes || 0}*\n` +
+      `💬 Em atendimento: *${m.abertos || 0}*\n` +
+      `⚡ TPR médio: *${fmt(m.tpr_medio)}*\n` +
+      `🕐 TMA médio: *${fmt(m.tma_medio)}*\n\n` +
+      `🏆 *Top atendentes:*\n${ranking}\n\n` +
+      `_Gerado automaticamente pelo Synapse Chat_`;
+
+    return { telefone, resumo };
+  } catch (err) {
+    logger.error({ err: err.message }, '[IA] Erro ao gerar resumo diário');
+    return null;
+  }
+}

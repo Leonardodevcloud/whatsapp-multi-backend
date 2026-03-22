@@ -260,6 +260,27 @@ function _iniciarCronJobs() {
       logger.error({ err: err.message }, '[Cron] Erro no aprendizado IA (boot)');
     }
   }, 10 * 60 * 1000); // 10 min
+
+  // ---- Cron Resumo Diário às 19h ----
+  const _checkResumoDiario = async () => {
+    const agora = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Bahia' }));
+    if (agora.getHours() === 19 && agora.getMinutes() < 5) {
+      try {
+        const { gerarResumoDiario } = require('./modules/ai/ai.service');
+        const resultado = await gerarResumoDiario();
+        if (resultado) {
+          const conexaoWA = require('./modules/whatsapp/whatsapp.connection');
+          if (conexaoWA.status === 'conectado' || (conexaoWA.instanceId && conexaoWA.token)) {
+            await conexaoWA.enviarTexto(resultado.telefone, resultado.resumo);
+            logger.info('[Cron] Resumo diário enviado');
+          }
+        }
+      } catch (err) {
+        logger.error({ err: err.message }, '[Cron] Erro no resumo diário');
+      }
+    }
+  };
+  setInterval(_checkResumoDiario, 5 * 60 * 1000); // Check a cada 5 min
 }
 
 /**

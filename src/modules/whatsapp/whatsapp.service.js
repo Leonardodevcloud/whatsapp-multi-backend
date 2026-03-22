@@ -448,6 +448,10 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
       _classificarTicketAuto(ticketId, corpo).catch(() => {});
       // Resposta automática fora do horário (com IA se possível)
       _respostaForaDoHorario(ticketId, corpo, contatoId, isGroup).catch(() => {});
+      // Detecção de urgência
+      _detectarUrgenciaIA(ticketId, corpo).catch(() => {});
+      // Resposta automática inteligente
+      _respostaAutoInteligente(ticketId, corpo, isGroup).catch(() => {});
     }
 
     return mensagemCompleta;
@@ -743,6 +747,57 @@ ${baseTexto}` }] },
     logger.info({ ticketId, temIA: !!respostaIA }, '[Horário] Resposta automática fora do horário enviada');
   } catch (err) {
     logger.error({ err: err.message, ticketId }, '[Horário] Erro na resposta fora do horário');
+  }
+}
+
+/**
+ * Detectar urgência via IA
+ */
+async function _detectarUrgenciaIA(ticketId, textoMensagem) {
+  try {
+    const { detectarUrgencia } = require('../ai/ai.service');
+    await detectarUrgencia(ticketId, textoMensagem);
+  } catch {}
+}
+
+/**
+ * Resposta automática inteligente via IA
+ */
+async function _respostaAutoInteligente(ticketId, textoMensagem, isGroup) {
+  try {
+    const { respostaAutomaticaInteligente } = require('../ai/ai.service');
+    const resposta = await respostaAutomaticaInteligente(ticketId, textoMensagem, isGroup);
+    if (!resposta) return;
+
+    // Enviar via Z-API
+    const destResult = await query(
+      `SELECT c.telefone, c.lid FROM tickets t JOIN contatos c ON c.id = t.contato_id WHERE t.id = $1`,
+      [ticketId]
+    );
+    if (destResult.rows.length === 0) return;
+
+    const { telefone, lid } = destResult.rows[0];
+    const destino = lid ? `${lid}@lid` : telefone;
+
+    const sent = await conexaoWA.enviarTexto(destino, resposta);
+
+    await query(
+      `INSERT INTO mensagens (ticket_id, corpo, tipo, wa_message_id, is_from_me, status_envio)
+       VALUES ($1, $2, 'texto', $3, TRUE, 'enviada')`,
+      [ticketId, resposta, sent?.key?.id || null]
+    );
+
+    await query(
+      `UPDATE tickets SET ultima_mensagem_em = NOW(), ultima_mensagem_preview = $1, atualizado_em = NOW() WHERE id = $2`,
+      [resposta.substring(0, 200), ticketId]
+    );
+
+    const { broadcast } = require('../../websocket');
+    broadcast('mensagem:nova', { ticket_id: ticketId });
+
+    logger.info({ ticketId }, '[IA] Resposta automática inteligente enviada');
+  } catch (err) {
+    logger.error({ err: err.message }, '[IA] Erro na resposta auto inteligente');
   }
 }
 

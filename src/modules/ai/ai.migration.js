@@ -69,6 +69,28 @@ async function initIATables() {
     await query(`CREATE INDEX IF NOT EXISTS idx_ia_conhecimento_categoria ON ia_conhecimento(categoria)`);
     await query(`CREATE INDEX IF NOT EXISTS idx_ia_tags_regras_ativo ON ia_tags_regras(ativo) WHERE ativo = TRUE`);
 
+    // Configurações da IA (toggles)
+    await query(`
+      CREATE TABLE IF NOT EXISTS ia_config (
+        chave VARCHAR(100) PRIMARY KEY,
+        valor VARCHAR(500) NOT NULL DEFAULT 'false',
+        descricao VARCHAR(300),
+        atualizado_em TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    // Seed configs padrão
+    const configs = [
+      ['auto_resposta_ativa', 'false', 'IA responde automaticamente quando tem alta confiança'],
+      ['auto_resposta_grupos', 'false', 'Permitir resposta automática em grupos'],
+      ['detectar_urgencia', 'true', 'Detectar mensagens urgentes e priorizar chamado'],
+      ['resumo_diario', 'true', 'Enviar resumo diário da operação às 19h'],
+      ['resumo_diario_telefone', '', 'Telefone/grupo para enviar resumo diário'],
+    ];
+    for (const [chave, valor, descricao] of configs) {
+      await query(`INSERT INTO ia_config (chave, valor, descricao) VALUES ($1, $2, $3) ON CONFLICT (chave) DO NOTHING`, [chave, valor, descricao]);
+    }
+
     logger.info('[IA] Tabelas criadas/verificadas');
   } catch (err) {
     logger.error({ err: err.message }, '[IA] Erro na migration');

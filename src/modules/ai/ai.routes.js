@@ -207,4 +207,21 @@ router.post('/aprender-agora', verificarToken, verificarAdmin, async (req, res, 
   } catch (err) { next(err); }
 });
 
+// ============================================================
+// CONFIG IA — toggles
+// ============================================================
+
+router.get('/config', verificarToken, async (req, res) => {
+  try { res.json(await aiService.getIaConfig()); } catch (err) { res.status(500).json({ erro: err.message }); }
+});
+
+router.put('/config', verificarToken, verificarAdmin, async (req, res) => {
+  try {
+    const { chave, valor } = req.body;
+    if (!chave) return res.status(400).json({ erro: 'chave obrigatória' });
+    await aiService.setIaConfig(chave, String(valor));
+    res.json({ sucesso: true });
+  } catch (err) { res.status(500).json({ erro: err.message }); }
+});
+
 module.exports = router;
