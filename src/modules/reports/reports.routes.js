@@ -45,4 +45,68 @@ router.get('/tempos-resposta', verificarToken, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+router.get('/picos', verificarToken, verificarAdminOuSupervisor, async (req, res, next) => {
+  try {
+    const { dias } = req.query;
+    res.json(await reportsService.picosAtendimento({ dias: parseInt(dias) || 30 }));
+  } catch (err) { next(err); }
+});
+
+router.get('/heatmap', verificarToken, async (req, res, next) => {
+  try {
+    const { dias } = req.query;
+    res.json(await reportsService.volumePorHoraDia({ dias: parseInt(dias) || 30 }));
+  } catch (err) { next(err); }
+});
+
+router.get('/atendente/:id', verificarToken, verificarAdminOuSupervisor, async (req, res, next) => {
+  try {
+    const { dias } = req.query;
+    res.json(await reportsService.detalheAtendente(req.params.id, { dias: parseInt(dias) || 30 }));
+  } catch (err) { next(err); }
+});
+
+// AI Insights — análise inteligente
+router.get('/insights', verificarToken, verificarAdminOuSupervisor, async (req, res) => {
+  try {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return res.json({ insights: [] });
+
+    const { dias } = req.query;
+    const d = parseInt(dias) || 30;
+
+    const [dashboard, picos, performance, tempos] = await Promise.all([
+      reportsService.obterDashboard(),
+      reportsService.picosAtendimento({ dias: d }),
+      reportsService.performanceAtendentes({ dias: d }),
+      reportsService.temposResposta({ dias: d }),
+    ]);
+
+    const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
+    const resp = await fetch(`${GEMINI_API}?key=${apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        system_instruction: { parts: [{ text: `Você é um analista de operações de atendimento ao cliente.
+Analise os dados e gere 3-5 insights CONCISOS e ACIONÁVEIS em português.
+Cada insight deve ter: tipo (positivo/alerta/sugestao), titulo (máx 10 palavras), descricao (máx 30 palavras).
+Foque em: gargalos, oportunidades, tendências, dimensionamento de equipe.
+Responda APENAS em JSON: {"insights": [{"tipo": "alerta", "titulo": "...", "descricao": "..."}]}` }] },
+        contents: [{ parts: [{ text: `Dashboard: ${JSON.stringify(dashboard)}
+Picos por hora: ${JSON.stringify(picos.slice(0, 12))}
+Performance atendentes: ${JSON.stringify(performance.map(p => ({ nome: p.nome, tickets: p.tickets_total, resolvidos: p.resolvidos, tpr: p.tpr_medio })))}
+Tempos resposta: ${JSON.stringify(tempos)}` }] }],
+        generationConfig: { temperature: 0.3, maxOutputTokens: 500, responseMimeType: 'application/json' },
+      }),
+    });
+
+    if (!resp.ok) return res.json({ insights: [] });
+    const data = await resp.json();
+    const texto = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    const match = texto.match(/\{[\s\S]*\}/);
+    const resultado = match ? JSON.parse(match[0]) : { insights: [] };
+    res.json(resultado);
+  } catch { res.json({ insights: [] }); }
+});
+
 module.exports = router;

@@ -170,4 +170,98 @@ module.exports = {
   performanceAtendentes,
   csatDistribuicao,
   temposResposta,
+  picosAtendimento,
+  detalheAtendente,
+  volumePorHoraDia,
 };
+
+/**
+ * Picos de atendimento — hora a hora com qtd atendentes ativos
+ */
+async function picosAtendimento({ dias = 30 } = {}) {
+  const resultado = await query(`
+    SELECT
+      EXTRACT(HOUR FROM t.criado_em) as hora,
+      COUNT(t.id) as tickets,
+      COUNT(DISTINCT t.usuario_id) as atendentes_ativos,
+      ROUND(AVG(t.tempo_primeira_resposta_seg) FILTER (WHERE t.tempo_primeira_resposta_seg IS NOT NULL)) as tpr_medio,
+      ROUND(AVG(t.tempo_resolucao_seg) FILTER (WHERE t.tempo_resolucao_seg IS NOT NULL)) as tr_medio
+    FROM tickets t
+    WHERE t.criado_em >= NOW() - ($1 || ' days')::INTERVAL
+    GROUP BY EXTRACT(HOUR FROM t.criado_em)
+    ORDER BY hora
+  `, [dias]);
+
+  // Calcular média de tickets por hora por dia
+  const totalDias = Math.max(dias, 1);
+  return resultado.rows.map(r => ({
+    hora: parseInt(r.hora),
+    tickets_total: parseInt(r.tickets),
+    tickets_media_dia: Math.round(parseInt(r.tickets) / totalDias * 10) / 10,
+    atendentes_ativos: parseInt(r.atendentes_ativos),
+    atendentes_recomendados: Math.max(1, Math.ceil(parseInt(r.tickets) / totalDias / 3)),
+    tpr_medio: parseInt(r.tpr_medio) || 0,
+    tr_medio: parseInt(r.tr_medio) || 0,
+  }));
+}
+
+/**
+ * Volume por hora e dia da semana (heatmap)
+ */
+async function volumePorHoraDia({ dias = 30 } = {}) {
+  const resultado = await query(`
+    SELECT
+      EXTRACT(DOW FROM criado_em) as dia_semana,
+      EXTRACT(HOUR FROM criado_em) as hora,
+      COUNT(*) as total
+    FROM tickets
+    WHERE criado_em >= NOW() - ($1 || ' days')::INTERVAL
+    GROUP BY EXTRACT(DOW FROM criado_em), EXTRACT(HOUR FROM criado_em)
+    ORDER BY dia_semana, hora
+  `, [dias]);
+  return resultado.rows;
+}
+
+/**
+ * Detalhe individual do atendente
+ */
+async function detalheAtendente(userId, { dias = 30 } = {}) {
+  // Resumo
+  const resumo = await query(`
+    SELECT u.id, u.nome, u.avatar_url, u.online, u.email, u.perfil,
+           COUNT(t.id) as tickets_total,
+           COUNT(t.id) FILTER (WHERE t.status = 'resolvido') as resolvidos,
+           COUNT(t.id) FILTER (WHERE t.status IN ('aberto', 'aguardando')) as ativos,
+           ROUND(AVG(t.tempo_primeira_resposta_seg) FILTER (WHERE t.tempo_primeira_resposta_seg IS NOT NULL)) as tpr_medio,
+           ROUND(AVG(t.tempo_resolucao_seg) FILTER (WHERE t.tempo_resolucao_seg IS NOT NULL)) as tr_medio,
+           ROUND(AVG(t.avaliacao) FILTER (WHERE t.avaliacao IS NOT NULL), 1) as csat_medio,
+           MIN(t.criado_em) FILTER (WHERE t.status = 'resolvido') as primeiro_resolvido,
+           MAX(t.atualizado_em) FILTER (WHERE t.status = 'resolvido') as ultimo_resolvido
+    FROM usuarios u
+    LEFT JOIN tickets t ON t.usuario_id = u.id AND t.criado_em >= NOW() - ($2 || ' days')::INTERVAL
+    WHERE u.id = $1
+    GROUP BY u.id
+  `, [userId, dias]);
+
+  // Volume por dia
+  const porDia = await query(`
+    SELECT DATE(criado_em) as dia, COUNT(*) as total, COUNT(*) FILTER (WHERE status = 'resolvido') as resolvidos
+    FROM tickets
+    WHERE usuario_id = $1 AND criado_em >= NOW() - ($2 || ' days')::INTERVAL
+    GROUP BY DATE(criado_em)
+    ORDER BY dia
+  `, [userId, dias]);
+
+  // Por hora
+  const porHora = await query(`
+    SELECT EXTRACT(HOUR FROM criado_em) as hora, COUNT(*) as total
+    FROM tickets WHERE usuario_id = $1 AND criado_em >= NOW() - ($2 || ' days')::INTERVAL
+    GROUP BY EXTRACT(HOUR FROM criado_em) ORDER BY hora
+  `, [userId, dias]);
+
+  return {
+    resumo: resumo.rows[0] || null,
+    por_dia: porDia.rows,
+    por_hora: porHora.rows,
+  };
+}
