@@ -437,6 +437,12 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
     };
 
     logger.info({ ticketId, waMessageId, tipo, fromMe, isGroup, contatoId }, '[WA] ✅ Mensagem processada');
+
+    // Auto-classificação em background (não bloqueia)
+    if (!fromMe && corpo) {
+      _classificarTicketAuto(ticketId, corpo).catch(() => {});
+    }
+
     return mensagemCompleta;
   } catch (err) {
     await client.query('ROLLBACK');
@@ -583,6 +589,55 @@ async function buscarFotoPerfil(telefone) {
 // ============================================================
 
 // Obter destino pra envio — prioriza lid (Z-API aceita @lid)
+/**
+ * Auto-classificar ticket por palavras-chave (sem API call — instantâneo)
+ * Verifica ia_tags_regras e atribui a tag se encontrar match
+ */
+async function _classificarTicketAuto(ticketId, textoMensagem) {
+  try {
+    // Já tem assunto? Não sobrescrever
+    const ticket = await query(`SELECT assunto FROM tickets WHERE id = $1`, [ticketId]);
+    if (ticket.rows[0]?.assunto) return;
+
+    // Buscar regras ativas
+    const regras = await query(`SELECT id, tag, palavras_chave FROM ia_tags_regras WHERE ativo = TRUE`);
+    if (regras.rows.length === 0) return;
+
+    const textoLower = textoMensagem.toLowerCase();
+
+    // Verificar cada regra por match de palavra-chave
+    let melhorMatch = null;
+    let maxHits = 0;
+
+    for (const regra of regras.rows) {
+      const palavras = regra.palavras_chave.split(',').map(p => p.trim().toLowerCase()).filter(Boolean);
+      const hits = palavras.filter(p => textoLower.includes(p)).length;
+      if (hits > maxHits) {
+        maxHits = hits;
+        melhorMatch = regra;
+      }
+    }
+
+    if (melhorMatch && maxHits > 0) {
+      await query(`UPDATE tickets SET assunto = $1, atualizado_em = NOW() WHERE id = $2`, [melhorMatch.tag, ticketId]);
+      await query(`UPDATE ia_tags_regras SET acertos = acertos + 1 WHERE id = $1`, [melhorMatch.id]);
+
+      // Invalidar cache
+      try {
+        const { invalidarCacheListagens } = require('../tickets/tickets.service');
+        await invalidarCacheListagens();
+      } catch (_) {}
+
+      const { broadcast } = require('../../websocket');
+      broadcast('ticket:atualizado', { ticketId, assunto: melhorMatch.tag });
+
+      logger.info({ ticketId, tag: melhorMatch.tag, hits: maxHits }, '[IA Auto] Ticket classificado por palavras-chave');
+    }
+  } catch (err) {
+    logger.error({ err: err.message, ticketId }, '[IA Auto] Erro na classificação');
+  }
+}
+
 async function _obterDestinoDoTicket(ticketId) {
   if (conexaoWA.status !== 'conectado' && conexaoWA.instanceId && conexaoWA.token) {
     conexaoWA.status = 'conectado';
