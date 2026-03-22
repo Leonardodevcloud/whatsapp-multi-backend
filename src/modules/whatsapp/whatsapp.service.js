@@ -595,10 +595,6 @@ async function buscarFotoPerfil(telefone) {
  */
 async function _classificarTicketAuto(ticketId, textoMensagem) {
   try {
-    // Já tem assunto? Não sobrescrever
-    const ticket = await query(`SELECT assunto FROM tickets WHERE id = $1`, [ticketId]);
-    if (ticket.rows[0]?.assunto) return;
-
     // Buscar regras ativas
     const regras = await query(`SELECT id, tag, palavras_chave FROM ia_tags_regras WHERE ativo = TRUE`);
     if (regras.rows.length === 0) return;
