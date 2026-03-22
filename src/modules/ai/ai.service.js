@@ -80,6 +80,10 @@ Responda APENAS em JSON: {"tag": "nome_da_tag", "confianca": 0.95, "justificativ
     melhoria: `Você é um assistente que melhora textos de atendimento.
 Reescreva o texto do atendente de forma mais profissional e empática, mantendo o sentido.
 Responda APENAS em JSON: {"texto_melhorado": "texto reescrito"}`,
+
+    sentimento: `Você é um analisador de sentimento de conversas de atendimento.
+Analise as mensagens do contato e classifique o sentimento geral.
+Responda APENAS em JSON: {"sentimento": "positivo|neutro|negativo", "confianca": 0.95, "resumo": "motivo curto"}`,
   };
 
   const systemPrompt = [
@@ -138,7 +142,7 @@ async function chamarGemini(systemPrompt, userMessage) {
 }
 
 // Sugestão de resposta
-async function sugerirResposta(ticketId) {
+async function sugerirResposta(ticketId, mensagemCliente) {
   const msgs = await query(
     `SELECT corpo, is_from_me, criado_em FROM mensagens
      WHERE ticket_id = $1 AND deletada = FALSE
@@ -146,11 +150,16 @@ async function sugerirResposta(ticketId) {
     [ticketId]
   );
 
-  if (msgs.rows.length === 0) return { sugestoes: [] };
+  if (msgs.rows.length === 0 && !mensagemCliente) return { sugestoes: [] };
 
-  const conversa = msgs.rows.reverse().map(m =>
+  let conversa = msgs.rows.reverse().map(m =>
     `${m.is_from_me ? 'Atendente' : 'Contato'}: ${m.corpo}`
   ).join('\n');
+
+  // Se veio mensagem_cliente explícita, adicionar ao final
+  if (mensagemCliente) {
+    conversa += `\nContato: ${mensagemCliente}`;
+  }
 
   const systemPrompt = await construirSystemPrompt({ tipo: 'sugestao', mensagensRecentes: msgs.rows });
   const resultado = await chamarGemini(systemPrompt, `Conversa:\n${conversa}`);
@@ -202,6 +211,24 @@ async function melhorarTexto(texto) {
   const systemPrompt = await construirSystemPrompt({ tipo: 'melhoria' });
   const resultado = await chamarGemini(systemPrompt, `Texto original: "${texto}"`);
   return resultado || { texto_melhorado: texto };
+}
+
+// Analisar sentimento do contato
+async function analisarSentimento(ticketId) {
+  const msgs = await query(
+    `SELECT corpo, is_from_me FROM mensagens
+     WHERE ticket_id = $1 AND deletada = FALSE AND is_from_me = FALSE
+     ORDER BY id DESC LIMIT 10`,
+    [ticketId]
+  );
+
+  if (msgs.rows.length === 0) return { sentimento: 'neutro', confianca: 0, resumo: 'Sem mensagens do contato' };
+
+  const textoContato = msgs.rows.reverse().map(m => m.corpo).join('\n');
+  const systemPrompt = await construirSystemPrompt({ tipo: 'sentimento' });
+  const resultado = await chamarGemini(systemPrompt, `Mensagens do contato:\n${textoContato}`);
+
+  return resultado || { sentimento: 'neutro', confianca: 0 };
 }
 
 // ============================================================
@@ -457,7 +484,7 @@ async function obterStats() {
 
 module.exports = {
   // IA calls
-  sugerirResposta, resumirTicket, classificarTicket, melhorarTexto,
+  sugerirResposta, resumirTicket, classificarTicket, melhorarTexto, analisarSentimento,
   registrarFeedback, construirSystemPrompt,
   // Cron
   aprenderDeTicketsFechados,

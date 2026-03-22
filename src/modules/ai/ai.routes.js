@@ -9,18 +9,43 @@ const router = Router();
 // IA CALLS — sugestão, resumo, classificação, melhoria
 // ============================================================
 
-// POST /api/ia/sugestao/:ticketId
+// POST /api/ai/sugestao/:ticketId (com mensagem_cliente no body)
+// GET  /api/ai/sugestao/:ticketId (usa últimas mensagens)
 router.post('/sugestao/:ticketId', verificarToken, async (req, res, next) => {
   try {
+    const resultado = await ia.sugerirResposta(req.params.ticketId, req.body?.mensagem_cliente);
+    // Frontend espera { sugestao: "texto" } (string, não array)
+    const texto = resultado?.sugestoes?.[0] || resultado?.sugestao || resultado?.raw || 'Não foi possível gerar sugestão. Tente novamente.';
+    res.json({ sugestao: texto });
+  } catch (err) { next(err); }
+});
+router.get('/sugestao/:ticketId', verificarToken, async (req, res, next) => {
+  try {
     const resultado = await ia.sugerirResposta(req.params.ticketId);
-    res.json(resultado);
+    const texto = resultado?.sugestoes?.[0] || resultado?.sugestao || resultado?.raw || 'Não foi possível gerar sugestão. Tente novamente.';
+    res.json({ sugestao: texto });
   } catch (err) { next(err); }
 });
 
-// POST /api/ia/resumo/:ticketId
+// GET /api/ai/resumo/:ticketId (AiPanel chama GET)
+// POST /api/ai/resumo/:ticketId (fallback)
+router.get('/resumo/:ticketId', verificarToken, async (req, res, next) => {
+  try {
+    const resultado = await ia.resumirTicket(req.params.ticketId);
+    res.json({ resumo: resultado?.resumo || 'Sem resumo disponível.' });
+  } catch (err) { next(err); }
+});
 router.post('/resumo/:ticketId', verificarToken, async (req, res, next) => {
   try {
     const resultado = await ia.resumirTicket(req.params.ticketId);
+    res.json({ resumo: resultado?.resumo || 'Sem resumo disponível.' });
+  } catch (err) { next(err); }
+});
+
+// GET /api/ai/sentimento/:ticketId
+router.get('/sentimento/:ticketId', verificarToken, async (req, res, next) => {
+  try {
+    const resultado = await ia.analisarSentimento(req.params.ticketId);
     res.json(resultado);
   } catch (err) { next(err); }
 });
