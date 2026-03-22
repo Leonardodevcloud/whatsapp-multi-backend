@@ -997,6 +997,7 @@ router.get('/horario', verificarToken, async (req, res) => {
       id SERIAL PRIMARY KEY, dia_semana INTEGER NOT NULL UNIQUE,
       ativo BOOLEAN DEFAULT FALSE, hora_abertura VARCHAR(5) DEFAULT '08:00', hora_fechamento VARCHAR(5) DEFAULT '18:00'
     )`);
+    await dbQuery(`ALTER TABLE configuracao_horario ADD COLUMN IF NOT EXISTS bloquear_grupos BOOLEAN DEFAULT TRUE`).catch(() => {});
     const count = await dbQuery(`SELECT COUNT(*) as total FROM configuracao_horario`);
     if (parseInt(count.rows[0].total) === 0) {
       for (let d = 0; d <= 6; d++) {
@@ -1012,7 +1013,7 @@ router.get('/horario', verificarToken, async (req, res) => {
 router.put('/horario', verificarToken, verificarAdmin, async (req, res) => {
   try {
     const { query: dbQuery } = require('../../config/database');
-    const { horarios } = req.body;
+    const { horarios, bloquear_grupos } = req.body;
     if (!Array.isArray(horarios)) return res.status(400).json({ erro: 'horarios deve ser um array' });
 
     for (const h of horarios) {
@@ -1021,6 +1022,12 @@ router.put('/horario', verificarToken, verificarAdmin, async (req, res) => {
         [!!h.ativo, h.hora_abertura || '08:00', h.hora_fechamento || '18:00', h.dia_semana]
       );
     }
+
+    // Atualizar bloquear_grupos em todos os dias
+    if (bloquear_grupos !== undefined) {
+      await dbQuery(`UPDATE configuracao_horario SET bloquear_grupos = $1`, [!!bloquear_grupos]);
+    }
+
     res.json({ sucesso: true });
   } catch (err) { res.status(500).json({ erro: err.message }); }
 });

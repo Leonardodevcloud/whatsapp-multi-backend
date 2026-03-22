@@ -447,7 +447,7 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
     if (!fromMe && corpo) {
       _classificarTicketAuto(ticketId, corpo).catch(() => {});
       // Resposta automática fora do horário (com IA se possível)
-      _respostaForaDoHorario(ticketId, corpo, contatoId).catch(() => {});
+      _respostaForaDoHorario(ticketId, corpo, contatoId, isGroup).catch(() => {});
     }
 
     return mensagemCompleta;
@@ -605,7 +605,7 @@ async function buscarFotoPerfil(telefone) {
  * Se tiver base de conhecimento relevante, responde com IA + aviso de fora do horário
  * Se não, manda só o aviso. Ticket fica na fila.
  */
-async function _respostaForaDoHorario(ticketId, textoMensagem, contatoId) {
+async function _respostaForaDoHorario(ticketId, textoMensagem, contatoId, isGroup) {
   try {
     // Garantir tabela existe
     await query(`CREATE TABLE IF NOT EXISTS configuracao_horario (
@@ -615,15 +615,22 @@ async function _respostaForaDoHorario(ticketId, textoMensagem, contatoId) {
       hora_abertura VARCHAR(5) DEFAULT '08:00',
       hora_fechamento VARCHAR(5) DEFAULT '18:00'
     )`);
+    // Garantir coluna bloquear_grupos
+    await query(`ALTER TABLE configuracao_horario ADD COLUMN IF NOT EXISTS bloquear_grupos BOOLEAN DEFAULT TRUE`).catch(() => {});
 
     // Seed dias se vazio
     const count = await query(`SELECT COUNT(*) as total FROM configuracao_horario`);
     if (parseInt(count.rows[0].total) === 0) {
       for (let d = 0; d <= 6; d++) {
-        const ativo = d >= 1 && d <= 5; // seg-sex ativo
+        const ativo = d >= 1 && d <= 5;
         await query(`INSERT INTO configuracao_horario (dia_semana, ativo, hora_abertura, hora_fechamento) VALUES ($1, $2, '08:00', '18:00')`, [d, ativo]);
       }
-      logger.info('[Horário] Configuração padrão criada (seg-sex 08-18h)');
+    }
+
+    // Se for grupo, verificar se deve bloquear
+    if (isGroup) {
+      const configGrupo = await query(`SELECT bloquear_grupos FROM configuracao_horario LIMIT 1`);
+      if (configGrupo.rows[0]?.bloquear_grupos !== false) return; // Default: bloqueia grupos
     }
 
     // Checar se tem horário configurado
