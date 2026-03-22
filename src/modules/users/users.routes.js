@@ -40,4 +40,23 @@ router.patch('/:id', verificarToken, verificarAdmin, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// POST /api/users/:id/avatar — upload de avatar base64
+router.post('/:id/avatar', verificarToken, verificarAdmin, async (req, res, next) => {
+  try {
+    const { avatar_base64 } = req.body;
+    if (!avatar_base64) return res.status(400).json({ erro: 'avatar_base64 é obrigatório' });
+
+    const { uploadMidia } = require('../../shared/mediaUpload');
+    const url = await uploadMidia(avatar_base64, 'imagem', `avatars/user-${req.params.id}`);
+
+    const usuario = await usersService.atualizarUsuario({
+      userId: req.params.id,
+      dados: { avatar_url: url },
+      adminId: req.usuario.id,
+      ip: req.ip,
+    });
+    res.json(usuario);
+  } catch (err) { next(err); }
+});
+
 module.exports = router;

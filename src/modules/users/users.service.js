@@ -55,7 +55,7 @@ async function obterUsuarioPorId(userId) {
  */
 async function atualizarUsuario({ userId, dados, adminId, ip }) {
   const id = validarId(userId);
-  const camposPermitidos = ['nome', 'email', 'perfil', 'max_tickets_simultaneos', 'ativo'];
+  const camposPermitidos = ['nome', 'email', 'perfil', 'max_tickets_simultaneos', 'ativo', 'avatar_url'];
 
   const updates = [];
   const params = [];
