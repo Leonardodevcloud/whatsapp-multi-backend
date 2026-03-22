@@ -283,7 +283,11 @@ router.put('/editar-mensagem', verificarToken, async (req, res, next) => {
       usuarioId: req.usuario.id,
     });
 
-    broadcast('mensagem:editada', resultado);
+    broadcast('mensagem:editada', {
+      mensagemId: resultado.id,
+      ticketId: resultado.ticket_id,
+      novoCorpo: resultado.corpo,
+    });
 
     res.json({ sucesso: true, mensagem: resultado });
   } catch (err) {
@@ -509,9 +513,32 @@ router.post('/webhook', async (req, res) => {
       const isGroup = body.isGroup || false;
       const fromMe = body.fromMe || false;
 
+      // ---- MENSAGEM EDITADA PELO CONTATO (isEdit=true) ----
+      if (body.isEdit === true && body.phone) {
+        const msgId = body.messageId || body.id?.id;
+        const novoTexto = body.text?.message || body.text?.body || (typeof body.text === 'string' ? body.text : '') || body.message;
+        if (msgId && novoTexto) {
+          const { query: dbQuery } = require('../../config/database');
+          const result = await dbQuery(
+            `UPDATE mensagens SET corpo = $1, atualizado_em = NOW()
+             WHERE wa_message_id = $2 RETURNING id, ticket_id`,
+            [novoTexto, msgId]
+          );
+          if (result.rows.length > 0) {
+            broadcast('mensagem:editada', {
+              mensagemId: result.rows[0].id,
+              ticketId: result.rows[0].ticket_id,
+              novoCorpo: novoTexto,
+            });
+            logger.info({ msgId, dbId: result.rows[0].id }, '[Webhook] Mensagem editada pelo contato');
+          }
+        }
+        return;
+      }
+
       // ---- MENSAGEM APAGADA COM PHONE (revoke pode vir junto com phone) ----
+      // IMPORTANTE: isRevoked=true tem prioridade sobre temConteudoReal
       const isRevokeComPhone = (
-        body.waitingMessage === true ||
         body.isRevoked === true ||
         body.type === 'revoked' ||
         body.type === 'delete' ||
@@ -519,10 +546,10 @@ router.post('/webhook', async (req, res) => {
         (body.protocolMessage && body.protocolMessage.type === 0)
       );
 
-      // Só tratar como revoke se NÃO tem conteúdo de mensagem real
-      const temConteudoReal = body.text || body.image || body.audio || body.video || body.document || body.sticker || body.location || body.contactMessage || body.contact;
+      // waitingMessage SEM conteúdo real também é revoke
+      const isWaitingRevoke = (body.waitingMessage === true && !body.text && !body.image && !body.audio && !body.video && !body.document && !body.sticker);
 
-      if (isRevokeComPhone && !temConteudoReal) {
+      if ((isRevokeComPhone || isWaitingRevoke) && !body.isEdit) {
         const msgId = body.messageId || body.id?.id || body.referenceMessageId
           || body.protocolMessage?.key?.id || body.ids?.[0]?.id;
 
