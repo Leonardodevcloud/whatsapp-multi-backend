@@ -465,7 +465,7 @@ async function fecharTicket({ ticketId, usuarioId, ip }) {
   const tId = validarId(ticketId);
 
   await query(
-    `UPDATE tickets SET status = 'fechado', fechado_em = NOW(), atualizado_em = NOW() WHERE id = $1`,
+    `UPDATE tickets SET status = 'fechado', fechado_em = NOW(), atualizado_em = NOW(), assunto = NULL, assunto_cor = NULL WHERE id = $1`,
     [tId]
   );
 
