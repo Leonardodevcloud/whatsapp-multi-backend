@@ -633,19 +633,21 @@ async function _classificarTicketAuto(ticketId, textoMensagem) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        system_instruction: { parts: [{ text: `Você é um classificador RIGOROSO de atendimentos via WhatsApp.
-Analise a mensagem do contato e classifique APENAS se tiver CERTEZA ABSOLUTA de que se encaixa numa tag.
+        system_instruction: { parts: [{ text: `Você é um classificador de atendimentos via WhatsApp. Sua função é decidir se uma mensagem se encaixa em alguma das tags abaixo.
+
 Tags disponíveis:
 ${regrasTexto}
 
-REGRAS IMPORTANTES:
-- Se a mensagem NÃO se encaixa CLARAMENTE em nenhuma tag, retorne tag "null". Prefira "null" a classificar errado.
-- Só classifique se a confiança for >= 0.85 (muito alta).
-- A mensagem precisa estar DIRETAMENTE relacionada ao tema da tag, não apenas vagamente.
-- Se houver dúvida entre tags ou se não for claro, retorne "null".
+REGRAS OBRIGATÓRIAS:
+1. Se a mensagem NÃO fala DIRETAMENTE sobre o tema específico de alguma tag, retorne SEMPRE {"tag": null, "confianca": 0, "palavras_novas": []}.
+2. Mensagens genéricas, saudações, perguntas sobre outros assuntos, assuntos pessoais, ou qualquer coisa que não seja EXPLICITAMENTE sobre os temas das tags = retorne null.
+3. Só classifique se a mensagem mencionar EXPLICITAMENTE o assunto da tag (ex: dinheiro, pagamento, saque para tag Financeiro).
+4. "Quero meu cachorro", "Cadê o cabelo?", "Bom dia", "Oi" = SEMPRE null.
+5. Na dúvida, retorne null. É melhor não classificar do que classificar errado.
+
 Responda APENAS em JSON: {"tag": "nome_da_tag", "confianca": 0.95, "palavras_novas": ["palavra1"]}` }] },
         contents: [{ parts: [{ text: `Mensagem do contato: "${textoMensagem}"` }] }],
-        generationConfig: { temperature: 0.2, maxOutputTokens: 200, responseMimeType: 'application/json' },
+        generationConfig: { temperature: 0.1, maxOutputTokens: 200, responseMimeType: 'application/json' },
       }),
     });
 
