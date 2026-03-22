@@ -212,14 +212,14 @@ router.post('/aprender-agora', verificarToken, verificarAdmin, async (req, res, 
 // ============================================================
 
 router.get('/config', verificarToken, async (req, res) => {
-  try { res.json(await aiService.getIaConfig()); } catch (err) { res.status(500).json({ erro: err.message }); }
+  try { res.json(await ia.getIaConfig()); } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
 router.put('/config', verificarToken, verificarAdmin, async (req, res) => {
   try {
     const { chave, valor } = req.body;
     if (!chave) return res.status(400).json({ erro: 'chave obrigatória' });
-    await aiService.setIaConfig(chave, String(valor));
+    await ia.setIaConfig(chave, String(valor));
     res.json({ sucesso: true });
   } catch (err) { res.status(500).json({ erro: err.message }); }
 });
