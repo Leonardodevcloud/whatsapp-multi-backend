@@ -917,11 +917,65 @@ async function editarMensagem({ mensagemId, novoTexto, usuarioId }) {
   return { id: mensagemId, corpo: novoTexto, ticket_id };
 }
 
+/**
+ * Enviar contato (vCard) via Z-API
+ */
+async function enviarContato({ ticketId, contactName, contactPhone, usuarioId }) {
+  const destino = await _obterDestinoDoTicket(ticketId);
+  const telefoneContato = contactPhone.replace(/\D/g, '');
+
+  await conexaoWA.enviarContato(destino, contactName, telefoneContato);
+
+  // Salvar no banco
+  const msgResult = await query(
+    `INSERT INTO mensagens (ticket_id, usuario_id, corpo, tipo, wa_message_id, is_from_me, status_envio)
+     VALUES ($1, $2, $3, 'contato', $4, TRUE, 'enviada')
+     RETURNING id, corpo, tipo, is_from_me, status_envio, criado_em`,
+    [ticketId, usuarioId, `👤 ${contactName}`, `vcard-${Date.now()}`]
+  );
+
+  await query(
+    `UPDATE tickets SET ultima_mensagem_em = NOW(), ultima_mensagem_preview = $1, atualizado_em = NOW() WHERE id = $2`,
+    [`👤 ${contactName}`, ticketId]
+  );
+
+  try {
+    const { invalidarCacheListagens } = require('../tickets/tickets.service');
+    await invalidarCacheListagens();
+  } catch (_) {}
+
+  return msgResult.rows[0];
+}
+
+/**
+ * Marcar mensagem como lida no WhatsApp (blue ticks pro contato)
+ */
+async function marcarLidaNoWhatsApp(ticketId) {
+  // Buscar última mensagem do contato (não lida)
+  const resultado = await query(
+    `SELECT m.wa_message_id, c.telefone, c.lid
+     FROM mensagens m
+     JOIN tickets t ON t.id = m.ticket_id
+     JOIN contatos c ON c.id = t.contato_id
+     WHERE m.ticket_id = $1 AND m.is_from_me = FALSE AND m.status_envio != 'lida'
+     ORDER BY m.id DESC LIMIT 1`,
+    [ticketId]
+  );
+  if (resultado.rows.length === 0) return;
+
+  const { wa_message_id, telefone, lid } = resultado.rows[0];
+  if (!wa_message_id || wa_message_id === 'sent') return;
+
+  const destino = lid ? `${lid}@lid` : telefone;
+  await conexaoWA.marcarComoLida(wa_message_id, destino);
+  logger.info({ ticketId, msgId: wa_message_id }, '[WA] Blue tick enviado');
+}
+
 module.exports = {
   enviarMensagemTexto, enviarAudio, enviarImagem, enviarVideo, enviarDocumento,
   buscarFotoPerfil, processarMensagemRecebida, iniciarConversa,
   reagirMensagem, deletarMensagem, encaminharMensagem, enviarSticker,
-  editarMensagem,
+  editarMensagem, enviarContato, marcarLidaNoWhatsApp,
   listarStickersGaleria, listarStickersRecebidos,
   mapearLidsContatos,
   obterQrCode, obterStatus, reconectar, forcarLogout,

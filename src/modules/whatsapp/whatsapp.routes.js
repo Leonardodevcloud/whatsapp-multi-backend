@@ -123,6 +123,41 @@ router.get('/foto-perfil/:telefone', verificarToken, async (req, res) => {
   res.json({ url });
 });
 
+// POST /api/whatsapp/enviar-contato — enviar vCard
+router.post('/enviar-contato', verificarToken, limiteSensivel, async (req, res, next) => {
+  try {
+    const { ticket_id, contact_name, contact_phone } = req.body;
+    if (!ticket_id || !contact_name || !contact_phone) {
+      return res.status(400).json({ erro: 'ticket_id, contact_name e contact_phone são obrigatórios' });
+    }
+
+    const mensagem = await whatsappService.enviarContato({
+      ticketId: ticket_id,
+      contactName: contact_name,
+      contactPhone: contact_phone,
+      usuarioId: req.usuario.id,
+    });
+
+    await _invalidarCaches(ticket_id);
+    broadcast('mensagem:nova', { ...mensagem, ticket_id: parseInt(ticket_id) });
+    res.json({ sucesso: true, mensagem });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/whatsapp/marcar-lida — blue ticks pro contato
+router.post('/marcar-lida', verificarToken, async (req, res) => {
+  try {
+    const { ticket_id } = req.body;
+    if (!ticket_id) return res.status(400).json({ erro: 'ticket_id é obrigatório' });
+    await whatsappService.marcarLidaNoWhatsApp(ticket_id);
+    res.json({ sucesso: true });
+  } catch {
+    res.json({ sucesso: false });
+  }
+});
+
 // POST /api/whatsapp/atualizar-fotos — busca foto de perfil de todos os contatos sem avatar
 router.post('/atualizar-fotos', verificarToken, verificarAdmin, async (req, res) => {
   const { query: dbQuery } = require('../../config/database');

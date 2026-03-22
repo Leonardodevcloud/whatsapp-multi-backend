@@ -211,6 +211,18 @@ class WhatsAppConnection extends EventEmitter {
     return data;
   }
 
+  async enviarContato(telefone, contactName, contactPhone) {
+    this._verificarConectado();
+    const resp = await fetch(`${this.baseUrl}/send-contact`, {
+      method: 'POST',
+      headers: this.headers,
+      body: JSON.stringify({ phone: telefone, contactName, contactPhone }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.message || `HTTP ${resp.status}`);
+    return data;
+  }
+
   async enviarSticker(telefone, stickerUrl) {
     this._verificarConectado();
     const resp = await fetch(`${this.baseUrl}/send-sticker`, {
