@@ -596,12 +596,12 @@ async function buscarFotoPerfil(telefone) {
 async function _classificarTicketAuto(ticketId, textoMensagem) {
   try {
     // Buscar regras ativas
-    const regras = await query(`SELECT id, tag, palavras_chave FROM ia_tags_regras WHERE ativo = TRUE`);
+    const regras = await query(`SELECT id, tag, palavras_chave, descricao FROM ia_tags_regras WHERE ativo = TRUE`);
     if (regras.rows.length === 0) return;
 
     const textoLower = textoMensagem.toLowerCase();
 
-    // Verificar cada regra por match de palavra-chave
+    // ---- CAMADA 1: Match por palavras-chave (instantâneo, sem custo) ----
     let melhorMatch = null;
     let maxHits = 0;
 
@@ -615,23 +615,91 @@ async function _classificarTicketAuto(ticketId, textoMensagem) {
     }
 
     if (melhorMatch && maxHits > 0) {
-      await query(`UPDATE tickets SET assunto = $1, atualizado_em = NOW() WHERE id = $2`, [melhorMatch.tag, ticketId]);
-      await query(`UPDATE ia_tags_regras SET acertos = acertos + 1 WHERE id = $1`, [melhorMatch.id]);
+      await _aplicarTagNoTicket(ticketId, melhorMatch, 'keyword');
+      return;
+    }
 
-      // Invalidar cache
-      try {
-        const { invalidarCacheListagens } = require('../tickets/tickets.service');
-        await invalidarCacheListagens();
-      } catch (_) {}
+    // ---- CAMADA 2: Gemini IA (fallback — entende sinônimos e contexto) ----
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return;
 
-      const { broadcast } = require('../../websocket');
-      broadcast('ticket:atualizado', { ticketId, assunto: melhorMatch.tag });
+    const regrasTexto = regras.rows.map(r =>
+      `- ${r.tag}: ${r.descricao || ''} (palavras-chave: ${r.palavras_chave})`
+    ).join('\n');
 
-      logger.info({ ticketId, tag: melhorMatch.tag, hits: maxHits }, '[IA Auto] Ticket classificado por palavras-chave');
+    const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
+
+    const resp = await fetch(`${GEMINI_API}?key=${apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        system_instruction: { parts: [{ text: `Você é um classificador de atendimentos via WhatsApp.
+Analise a mensagem do contato e classifique com a tag mais adequada.
+Tags disponíveis:
+${regrasTexto}
+
+Se nenhuma tag se encaixa, retorne tag "null".
+Identifique também 2-3 palavras-chave novas da mensagem que deveriam ser adicionadas às regras.
+Responda APENAS em JSON: {"tag": "nome_da_tag", "palavras_novas": ["palavra1", "palavra2"]}` }] },
+        contents: [{ parts: [{ text: `Mensagem do contato: "${textoMensagem}"` }] }],
+        generationConfig: { temperature: 0.2, maxOutputTokens: 200, responseMimeType: 'application/json' },
+      }),
+    });
+
+    if (!resp.ok) {
+      logger.error({ status: resp.status }, '[IA Auto] Erro Gemini classificação');
+      return;
+    }
+
+    const data = await resp.json();
+    const texto = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+
+    let resultado;
+    try {
+      const jsonMatch = texto.match(/\{[\s\S]*\}/);
+      resultado = jsonMatch ? JSON.parse(jsonMatch[0]) : null;
+    } catch { return; }
+
+    if (!resultado?.tag || resultado.tag === 'null') return;
+
+    // Encontrar a regra correspondente
+    const regraMatch = regras.rows.find(r => r.tag.toLowerCase() === resultado.tag.toLowerCase());
+    if (!regraMatch) return;
+
+    // Aplicar tag
+    await _aplicarTagNoTicket(ticketId, regraMatch, 'gemini');
+
+    // ---- AUTO-APRENDIZADO: adicionar palavras novas às keywords da regra ----
+    if (resultado.palavras_novas?.length > 0) {
+      const keywordsAtuais = regraMatch.palavras_chave.split(',').map(p => p.trim().toLowerCase());
+      const novas = resultado.palavras_novas
+        .map(p => p.toLowerCase().trim())
+        .filter(p => p.length >= 3 && !keywordsAtuais.includes(p));
+
+      if (novas.length > 0) {
+        const keywordsAtualizado = regraMatch.palavras_chave + ', ' + novas.join(', ');
+        await query(`UPDATE ia_tags_regras SET palavras_chave = $1 WHERE id = $2`, [keywordsAtualizado, regraMatch.id]);
+        logger.info({ tag: regraMatch.tag, novas }, '[IA Auto] Palavras-chave aprendidas');
+      }
     }
   } catch (err) {
     logger.error({ err: err.message, ticketId }, '[IA Auto] Erro na classificação');
   }
+}
+
+async function _aplicarTagNoTicket(ticketId, regra, metodo) {
+  await query(`UPDATE tickets SET assunto = $1, atualizado_em = NOW() WHERE id = $2`, [regra.tag, ticketId]);
+  await query(`UPDATE ia_tags_regras SET acertos = acertos + 1 WHERE id = $1`, [regra.id]);
+
+  try {
+    const { invalidarCacheListagens } = require('../tickets/tickets.service');
+    await invalidarCacheListagens();
+  } catch (_) {}
+
+  const { broadcast } = require('../../websocket');
+  broadcast('ticket:atualizado', { ticketId, assunto: regra.tag });
+
+  logger.info({ ticketId, tag: regra.tag, metodo }, '[IA Auto] Ticket classificado');
 }
 
 async function _obterDestinoDoTicket(ticketId) {
