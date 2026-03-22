@@ -50,7 +50,12 @@ async function enviarMensagemTexto({ ticketId, texto, usuarioId, quotedMessageId
       waQuotedId = qResult.rows[0]?.wa_message_id || null;
     }
 
-    const sent = await conexaoWA.enviarTexto(destino, texto, { quotedMessageId: waQuotedId });
+    // Prefixo com nome do atendente
+    const nomeResult2 = await query(`SELECT nome FROM usuarios WHERE id = $1`, [usuarioId]);
+    const nomeAtendente2 = nomeResult2.rows[0]?.nome || 'Atendente';
+    const textoComPrefixo = `*${nomeAtendente2}:*\n${texto}`;
+
+    const sent = await conexaoWA.enviarTexto(destino, textoComPrefixo, { quotedMessageId: waQuotedId });
 
     const msgResult = await query(
       `INSERT INTO mensagens (ticket_id, usuario_id, corpo, tipo, wa_message_id, is_from_me, status_envio, quoted_message_id)
@@ -441,6 +446,8 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
     // Auto-classificação em background (não bloqueia)
     if (!fromMe && corpo) {
       _classificarTicketAuto(ticketId, corpo).catch(() => {});
+      // Resposta automática fora do horário (com IA se possível)
+      _respostaForaDoHorario(ticketId, corpo, contatoId).catch(() => {});
     }
 
     return mensagemCompleta;
@@ -593,6 +600,145 @@ async function buscarFotoPerfil(telefone) {
  * Auto-classificar ticket — APENAS por palavras-chave. Sem IA.
  * Rápido, previsível, zero falso positivo.
  */
+/**
+ * Resposta automática fora do horário de atendimento
+ * Se tiver base de conhecimento relevante, responde com IA + aviso de fora do horário
+ * Se não, manda só o aviso. Ticket fica na fila.
+ */
+async function _respostaForaDoHorario(ticketId, textoMensagem, contatoId) {
+  try {
+    // Garantir tabela existe
+    await query(`CREATE TABLE IF NOT EXISTS configuracao_horario (
+      id SERIAL PRIMARY KEY,
+      dia_semana INTEGER NOT NULL UNIQUE,
+      ativo BOOLEAN DEFAULT FALSE,
+      hora_abertura VARCHAR(5) DEFAULT '08:00',
+      hora_fechamento VARCHAR(5) DEFAULT '18:00'
+    )`);
+
+    // Seed dias se vazio
+    const count = await query(`SELECT COUNT(*) as total FROM configuracao_horario`);
+    if (parseInt(count.rows[0].total) === 0) {
+      for (let d = 0; d <= 6; d++) {
+        const ativo = d >= 1 && d <= 5; // seg-sex ativo
+        await query(`INSERT INTO configuracao_horario (dia_semana, ativo, hora_abertura, hora_fechamento) VALUES ($1, $2, '08:00', '18:00')`, [d, ativo]);
+      }
+      logger.info('[Horário] Configuração padrão criada (seg-sex 08-18h)');
+    }
+
+    // Checar se tem horário configurado
+    const agora = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Bahia' }));
+    const diaSemana = agora.getDay(); // 0=dom, 6=sab
+    const horaAtual = `${String(agora.getHours()).padStart(2, '0')}:${String(agora.getMinutes()).padStart(2, '0')}`;
+
+    const config = await query(`SELECT * FROM configuracao_horario WHERE dia_semana = $1`, [diaSemana]);
+    if (config.rows.length === 0) return;
+
+    const dia = config.rows[0];
+
+    // Se o dia tá ativo e dentro do horário, não faz nada
+    if (dia.ativo && horaAtual >= dia.hora_abertura && horaAtual < dia.hora_fechamento) return;
+
+    // Estamos FORA do horário! Verificar se já mandou resposta automática pro ticket
+    const jaRespondeu = await query(
+      `SELECT id FROM mensagens WHERE ticket_id = $1 AND is_from_me = TRUE AND corpo LIKE '%fora do horário%' AND criado_em > NOW() - INTERVAL '4 hours'`,
+      [ticketId]
+    );
+    if (jaRespondeu.rows.length > 0) return; // Já mandou
+
+    // Tentar responder com IA usando base de conhecimento
+    let respostaIA = '';
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (apiKey && textoMensagem.length > 5) {
+      const conhecimento = await query(`SELECT pergunta, resposta, categoria FROM ia_conhecimento WHERE ativo = TRUE`);
+      if (conhecimento.rows.length > 0) {
+        const baseTexto = conhecimento.rows.map(r => `[${r.categoria || 'Geral'}] P: ${r.pergunta}\nR: ${r.resposta}`).join('\n\n');
+
+        const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
+        try {
+          const resp = await fetch(`${GEMINI_API}?key=${apiKey}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              system_instruction: { parts: [{ text: `Você é um assistente de atendimento da empresa. O atendimento está FORA DO HORÁRIO.
+Analise a pergunta do contato e veja se a base de conhecimento abaixo tem informação relevante.
+Se tiver, responda de forma curta e direta (máximo 3 frases). Interprete o SENTIDO, não as palavras exatas.
+Se NÃO tiver informação relevante, responda APENAS: {"tem_resposta": false}
+Se tiver, responda: {"tem_resposta": true, "resposta": "texto da resposta"}
+
+Base de conhecimento:
+${baseTexto}` }] },
+              contents: [{ parts: [{ text: `Pergunta do contato: "${textoMensagem}"` }] }],
+              generationConfig: { temperature: 0.2, maxOutputTokens: 300, responseMimeType: 'application/json' },
+            }),
+          });
+
+          if (resp.ok) {
+            const data = await resp.json();
+            const texto = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+            const match = texto.match(/\{[\s\S]*\}/);
+            if (match) {
+              const resultado = JSON.parse(match[0]);
+              if (resultado.tem_resposta && resultado.resposta) {
+                respostaIA = resultado.resposta;
+              }
+            }
+          }
+        } catch (e) {
+          logger.error({ err: e.message }, '[Horário] Erro ao chamar IA');
+        }
+      }
+    }
+
+    // Montar mensagem final
+    let mensagemAuto = '';
+    if (respostaIA) {
+      mensagemAuto = `🤖 *Atendimento automático:*\n${respostaIA}\n\n⏰ _Nosso horário de atendimento já encerrou. Amanhã um atendente dará continuidade ao seu chamado. Obrigado pela compreensão!_`;
+    } else {
+      mensagemAuto = `⏰ _Olá! Nosso horário de atendimento já encerrou. Amanhã um atendente entrará em contato. Obrigado pela compreensão!_`;
+    }
+
+    // Enviar via Z-API
+    const destResult = await query(
+      `SELECT c.telefone, c.lid FROM tickets t JOIN contatos c ON c.id = t.contato_id WHERE t.id = $1`,
+      [ticketId]
+    );
+    if (destResult.rows.length === 0) return;
+
+    const { telefone, lid } = destResult.rows[0];
+    const destino = lid ? `${lid}@lid` : telefone;
+
+    const sent = await conexaoWA.enviarTexto(destino, mensagemAuto);
+
+    // Salvar no banco
+    await query(
+      `INSERT INTO mensagens (ticket_id, corpo, tipo, wa_message_id, is_from_me, status_envio)
+       VALUES ($1, $2, 'texto', $3, TRUE, 'enviada')`,
+      [ticketId, mensagemAuto, sent?.key?.id || null]
+    );
+
+    await query(
+      `UPDATE tickets SET ultima_mensagem_em = NOW(), ultima_mensagem_preview = $1, atualizado_em = NOW() WHERE id = $2`,
+      [mensagemAuto.substring(0, 200), ticketId]
+    );
+
+    // Invalidar cache
+    try {
+      const { invalidarCacheListagens } = require('../tickets/tickets.service');
+      await invalidarCacheListagens();
+      const { invalidarCacheMensagens } = require('../messages/messages.service');
+      await invalidarCacheMensagens(ticketId);
+    } catch (_) {}
+
+    const { broadcast } = require('../../websocket');
+    broadcast('mensagem:nova', { ticket_id: ticketId });
+
+    logger.info({ ticketId, temIA: !!respostaIA }, '[Horário] Resposta automática fora do horário enviada');
+  } catch (err) {
+    logger.error({ err: err.message, ticketId }, '[Horário] Erro na resposta fora do horário');
+  }
+}
+
 async function _classificarTicketAuto(ticketId, textoMensagem) {
   try {
     const textoLimpo = (textoMensagem || '').trim().toLowerCase();

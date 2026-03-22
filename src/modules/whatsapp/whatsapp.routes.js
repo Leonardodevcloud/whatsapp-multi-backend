@@ -985,4 +985,44 @@ router.post('/webhook', async (req, res) => {
   }
 });
 
+// ============================================================
+// HORÁRIO DE ATENDIMENTO — config
+// ============================================================
+
+// GET /api/whatsapp/horario
+router.get('/horario', verificarToken, async (req, res) => {
+  try {
+    const { query: dbQuery } = require('../../config/database');
+    await dbQuery(`CREATE TABLE IF NOT EXISTS configuracao_horario (
+      id SERIAL PRIMARY KEY, dia_semana INTEGER NOT NULL UNIQUE,
+      ativo BOOLEAN DEFAULT FALSE, hora_abertura VARCHAR(5) DEFAULT '08:00', hora_fechamento VARCHAR(5) DEFAULT '18:00'
+    )`);
+    const count = await dbQuery(`SELECT COUNT(*) as total FROM configuracao_horario`);
+    if (parseInt(count.rows[0].total) === 0) {
+      for (let d = 0; d <= 6; d++) {
+        await dbQuery(`INSERT INTO configuracao_horario (dia_semana, ativo, hora_abertura, hora_fechamento) VALUES ($1, $2, '08:00', '18:00')`, [d, d >= 1 && d <= 5]);
+      }
+    }
+    const result = await dbQuery(`SELECT * FROM configuracao_horario ORDER BY dia_semana`);
+    res.json({ horarios: result.rows });
+  } catch (err) { res.status(500).json({ erro: err.message }); }
+});
+
+// PUT /api/whatsapp/horario
+router.put('/horario', verificarToken, verificarAdmin, async (req, res) => {
+  try {
+    const { query: dbQuery } = require('../../config/database');
+    const { horarios } = req.body;
+    if (!Array.isArray(horarios)) return res.status(400).json({ erro: 'horarios deve ser um array' });
+
+    for (const h of horarios) {
+      await dbQuery(
+        `UPDATE configuracao_horario SET ativo = $1, hora_abertura = $2, hora_fechamento = $3 WHERE dia_semana = $4`,
+        [!!h.ativo, h.hora_abertura || '08:00', h.hora_fechamento || '18:00', h.dia_semana]
+      );
+    }
+    res.json({ sucesso: true });
+  } catch (err) { res.status(500).json({ erro: err.message }); }
+});
+
 module.exports = router;
