@@ -30,6 +30,7 @@ const { initTicketsRoutes, initTicketsTables } = require('./modules/tickets');
 const { initMessagesRoutes, initMessagesTables } = require('./modules/messages');
 const { initContactsRoutes, initContactsTables } = require('./modules/contacts');
 const { initQueuesRoutes, initQueuesTables } = require('./modules/queues');
+const { initSupervisionRoutes } = require('./modules/supervision');
 const { initUsersRoutes } = require('./modules/users');
 const { initQuickRepliesRoutes } = require('./modules/quick-replies');
 const { initTagsRoutes } = require('./modules/tags');
@@ -117,6 +118,7 @@ initTagsRoutes(app);
 initConfigRoutes(app);
 initAiRoutes(app);
 initReportsRoutes(app);
+initSupervisionRoutes(app);
 
 // ============================================================
 // Error handler (deve ser o último middleware)

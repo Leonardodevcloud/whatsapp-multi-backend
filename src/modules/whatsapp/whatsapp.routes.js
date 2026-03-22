@@ -24,7 +24,7 @@ router.get('/qr', verificarToken, (req, res) => {
 // POST /api/whatsapp/enviar
 router.post('/enviar', verificarToken, limiteSensivel, async (req, res, next) => {
   try {
-    const { ticket_id, texto } = req.body;
+    const { ticket_id, texto, quoted_message_id } = req.body;
     if (!ticket_id || !texto?.trim()) {
       return res.status(400).json({ erro: 'ticket_id e texto são obrigatórios' });
     }
@@ -33,9 +33,9 @@ router.post('/enviar', verificarToken, limiteSensivel, async (req, res, next) =>
       ticketId: ticket_id,
       texto: texto.trim(),
       usuarioId: req.usuario.id,
+      quotedMessageId: quoted_message_id || null,
     });
 
-    // Broadcast imediato — todos os atendentes veem a mensagem na hora
     broadcast('mensagem:nova', { ...mensagem, ticket_id: parseInt(ticket_id) });
 
     res.json({ sucesso: true, mensagem });
@@ -266,6 +266,96 @@ router.post('/logout', verificarToken, verificarAdmin, async (req, res, next) =>
     res.json({ sucesso: true });
   } catch (err) {
     next(err);
+  }
+});
+
+// PUT /api/whatsapp/editar-mensagem — editar mensagem enviada (até 15min)
+router.put('/editar-mensagem', verificarToken, async (req, res, next) => {
+  try {
+    const { mensagem_id, novo_texto } = req.body;
+    if (!mensagem_id || !novo_texto?.trim()) {
+      return res.status(400).json({ erro: 'mensagem_id e novo_texto são obrigatórios' });
+    }
+
+    const resultado = await whatsappService.editarMensagem({
+      mensagemId: mensagem_id,
+      novoTexto: novo_texto.trim(),
+      usuarioId: req.usuario.id,
+    });
+
+    broadcast('mensagem:editada', resultado);
+
+    res.json({ sucesso: true, mensagem: resultado });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/whatsapp/buscar-mensagens/:ticketId — busca texto no chat
+router.get('/buscar-mensagens/:ticketId', verificarToken, async (req, res, next) => {
+  try {
+    const { ticketId } = req.params;
+    const { q } = req.query;
+    if (!q || q.trim().length < 2) {
+      return res.status(400).json({ erro: 'Busca precisa ter pelo menos 2 caracteres' });
+    }
+
+    const { query: dbQuery } = require('../../config/database');
+    const resultado = await dbQuery(
+      `SELECT m.id, m.corpo, m.tipo, m.is_from_me, m.criado_em, m.nome_participante,
+              c.nome as contato_nome, u.nome as usuario_nome
+       FROM mensagens m
+       LEFT JOIN contatos c ON c.id = m.contato_id
+       LEFT JOIN usuarios u ON u.id = m.usuario_id
+       WHERE m.ticket_id = $1 AND m.corpo ILIKE $2 AND m.deletada = FALSE
+       ORDER BY m.id DESC LIMIT 50`,
+      [ticketId, `%${q.trim()}%`]
+    );
+
+    res.json({ resultados: resultado.rows, total: resultado.rows.length });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/whatsapp/link-preview — busca Open Graph de uma URL
+router.get('/link-preview', verificarToken, async (req, res) => {
+  try {
+    const { url } = req.query;
+    if (!url) return res.status(400).json({ erro: 'url é obrigatória' });
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+
+    const resp = await fetch(url, {
+      signal: controller.signal,
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SynapseBot/1.0)' },
+      redirect: 'follow',
+    });
+    clearTimeout(timeout);
+
+    if (!resp.ok) return res.json({});
+
+    const html = await resp.text();
+    const getOg = (prop) => {
+      const m = html.match(new RegExp(`<meta[^>]+property=["']og:${prop}["'][^>]+content=["']([^"']+)["']`, 'i'))
+        || html.match(new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:${prop}["']`, 'i'));
+      return m ? m[1] : null;
+    };
+    const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+
+    const result = {
+      url,
+      title: getOg('title') || (titleMatch ? titleMatch[1].trim() : null),
+      description: getOg('description'),
+      image: getOg('image'),
+      siteName: getOg('site_name'),
+    };
+
+    if (!result.title) return res.json({});
+    res.json(result);
+  } catch {
+    res.json({});
   }
 });
 

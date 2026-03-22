@@ -11,7 +11,7 @@ const { uploadMidia } = require('../../shared/mediaUpload');
 // ============================================================
 // ENVIAR MENSAGEM DE TEXTO
 // ============================================================
-async function enviarMensagemTexto({ ticketId, texto, usuarioId }) {
+async function enviarMensagemTexto({ ticketId, texto, usuarioId, quotedMessageId }) {
   if (conexaoWA.status !== 'conectado' && conexaoWA.instanceId && conexaoWA.token) {
     conexaoWA.status = 'conectado';
   }
@@ -19,19 +19,16 @@ async function enviarMensagemTexto({ ticketId, texto, usuarioId }) {
     throw new AppError('WhatsApp não está conectado.', 503);
   }
 
-  // Buscar telefone OU lid do contato — priorizar lid pra envio
   const resultado = await query(
     `SELECT c.telefone, c.lid FROM tickets t JOIN contatos c ON c.id = t.contato_id WHERE t.id = $1`,
     [ticketId]
   );
   if (resultado.rows.length === 0) throw new AppError('Ticket não encontrado', 404);
 
-  // Pra enviar: usar lid se disponível (Z-API aceita @lid), senão telefone
   const { telefone, lid } = resultado.rows[0];
   const destino = lid ? `${lid}@lid` : telefone;
 
   try {
-    // Auto-aceitar: se chamado é pendente, atribuir ao atendente
     const ticketCheck = await query(`SELECT status, usuario_id FROM tickets WHERE id = $1`, [ticketId]);
     if (ticketCheck.rows[0]?.status === 'pendente') {
       await query(
@@ -46,13 +43,20 @@ async function enviarMensagemTexto({ ticketId, texto, usuarioId }) {
       logger.info({ ticketId, usuarioId }, '[WA] Chamado auto-aceito');
     }
 
-    const sent = await conexaoWA.enviarTexto(destino, texto);
+    // Buscar wa_message_id da mensagem citada pra enviar pro Z-API
+    let waQuotedId = null;
+    if (quotedMessageId) {
+      const qResult = await query(`SELECT wa_message_id FROM mensagens WHERE id = $1`, [quotedMessageId]);
+      waQuotedId = qResult.rows[0]?.wa_message_id || null;
+    }
+
+    const sent = await conexaoWA.enviarTexto(destino, texto, { quotedMessageId: waQuotedId });
 
     const msgResult = await query(
-      `INSERT INTO mensagens (ticket_id, usuario_id, corpo, tipo, wa_message_id, is_from_me, status_envio)
-       VALUES ($1, $2, $3, 'texto', $4, TRUE, 'enviada')
-       RETURNING id, corpo, tipo, is_from_me, status_envio, criado_em`,
-      [ticketId, usuarioId, texto, sent.key.id]
+      `INSERT INTO mensagens (ticket_id, usuario_id, corpo, tipo, wa_message_id, is_from_me, status_envio, quoted_message_id)
+       VALUES ($1, $2, $3, 'texto', $4, TRUE, 'enviada', $5)
+       RETURNING id, corpo, tipo, is_from_me, status_envio, criado_em, quoted_message_id`,
+      [ticketId, usuarioId, texto, sent.key.id, quotedMessageId || null]
     );
 
     await query(
@@ -860,10 +864,42 @@ async function listarStickersRecebidos({ limite = 50 }) {
   } catch { return []; }
 }
 
+/**
+ * Editar mensagem enviada (dentro de 15 minutos)
+ */
+async function editarMensagem({ mensagemId, novoTexto, usuarioId }) {
+  const msg = await query(
+    `SELECT m.id, m.wa_message_id, m.is_from_me, m.criado_em, m.ticket_id, c.telefone, c.lid
+     FROM mensagens m
+     JOIN tickets t ON t.id = m.ticket_id
+     JOIN contatos c ON c.id = t.contato_id
+     WHERE m.id = $1`,
+    [mensagemId]
+  );
+  if (msg.rows.length === 0) throw new AppError('Mensagem não encontrada', 404);
+  const { wa_message_id, is_from_me, criado_em, ticket_id, telefone, lid } = msg.rows[0];
+
+  if (!is_from_me) throw new AppError('Só é possível editar mensagens enviadas', 400);
+
+  const diffMin = (Date.now() - new Date(criado_em).getTime()) / 60000;
+  if (diffMin > 15) throw new AppError('Só é possível editar mensagens dentro de 15 minutos', 400);
+
+  if (!wa_message_id || wa_message_id === 'sent') throw new AppError('Mensagem sem ID do WhatsApp', 400);
+
+  const destino = lid ? `${lid}@lid` : telefone;
+  await conexaoWA.editarMensagem(wa_message_id, destino, novoTexto);
+
+  await query(`UPDATE mensagens SET corpo = $1, atualizado_em = NOW() WHERE id = $2`, [novoTexto, mensagemId]);
+
+  logger.info({ mensagemId, ticketId: ticket_id }, '[WA] Mensagem editada');
+  return { id: mensagemId, corpo: novoTexto, ticket_id };
+}
+
 module.exports = {
   enviarMensagemTexto, enviarAudio, enviarImagem, enviarVideo, enviarDocumento,
   buscarFotoPerfil, processarMensagemRecebida, iniciarConversa,
   reagirMensagem, deletarMensagem, encaminharMensagem, enviarSticker,
+  editarMensagem,
   listarStickersGaleria, listarStickersRecebidos,
   mapearLidsContatos,
   obterQrCode, obterStatus, reconectar, forcarLogout,

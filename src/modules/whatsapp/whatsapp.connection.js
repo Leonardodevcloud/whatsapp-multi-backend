@@ -1,5 +1,5 @@
 // src/modules/whatsapp/whatsapp.connection.js
-// Conexão WhatsApp via Z-API (CORRIGIDO)
+// Conexão WhatsApp via Z-API — com quote/reply e edição
 
 const { EventEmitter } = require('events');
 const logger = require('../../shared/logger');
@@ -17,15 +17,11 @@ class WhatsAppConnection extends EventEmitter {
     this.securityToken = null;
   }
 
-  get baseUrl() {
-    return `${ZAPI_BASE}/${this.instanceId}/token/${this.token}`;
-  }
+  get baseUrl() { return `${ZAPI_BASE}/${this.instanceId}/token/${this.token}`; }
 
   get headers() {
     const h = { 'Content-Type': 'application/json' };
-    if (this.securityToken) {
-      h['Client-Token'] = this.securityToken;
-    }
+    if (this.securityToken) h['Client-Token'] = this.securityToken;
     return h;
   }
 
@@ -42,7 +38,6 @@ class WhatsAppConnection extends EventEmitter {
 
     try {
       const response = await fetch(`${this.baseUrl}/status`, { headers: this.headers });
-
       if (!response.ok) {
         const errBody = await response.text();
         logger.error({ status: response.status, errBody }, '[WhatsApp] Erro ao verificar Z-API');
@@ -53,27 +48,15 @@ class WhatsAppConnection extends EventEmitter {
       const data = await response.json();
       logger.info({ data }, '[WhatsApp] Status Z-API');
 
-      if (data.connected) {
+      if (data.connected === true || data.smartphoneConnected === true) {
         this.status = 'conectado';
         this.inicioConexao = new Date();
-        this.infoUsuario = { name: 'WhatsApp Z-API', id: this.instanceId };
-
-        try {
-          const phoneResp = await fetch(`${this.baseUrl}/phone`, { headers: this.headers });
-          if (phoneResp.ok) {
-            const phoneData = await phoneResp.json();
-            if (phoneData.phone) {
-              this.infoUsuario.id = phoneData.phone;
-              this.infoUsuario.name = phoneData.name || 'WhatsApp Z-API';
-            }
-          }
-        } catch { /* não crítico */ }
-
-        logger.info({ usuario: this.infoUsuario }, '[WhatsApp] Z-API conectada!');
-        this.emit('conectado', this.infoUsuario);
+        this.infoUsuario = { phone: data.phoneConnected || 'Z-API' };
+        this.emit('conectado');
+        logger.info('[WhatsApp] Z-API conectada!');
       } else {
         this.status = 'desconectado';
-        logger.warn('[WhatsApp] Instância Z-API não conectada — escaneie QR no painel z-api.io');
+        logger.warn('[WhatsApp] Z-API não conectada ao telefone');
       }
     } catch (err) {
       logger.error({ err: err.message }, '[WhatsApp] Erro ao conectar Z-API');
@@ -81,15 +64,16 @@ class WhatsAppConnection extends EventEmitter {
     }
   }
 
-  /**
-   * Enviar texto — Z-API
-   */
-  async enviarTexto(telefone, texto) {
+  async enviarTexto(telefone, texto, opts = {}) {
     this._verificarConectado();
-
     const payload = { phone: telefone, message: texto };
 
-    logger.info({ telefone, textoLen: texto.length }, '[WhatsApp] Enviando texto');
+    // Quote/Reply — Z-API aceita messageId pra citar
+    if (opts.quotedMessageId) {
+      payload.messageId = opts.quotedMessageId;
+    }
+
+    logger.info({ telefone, textoLen: texto.length, quote: !!opts.quotedMessageId }, '[WhatsApp] Enviando texto');
 
     const response = await fetch(`${this.baseUrl}/send-text`, {
       method: 'POST',
@@ -105,13 +89,9 @@ class WhatsAppConnection extends EventEmitter {
     }
 
     logger.info({ responseBody }, '[WhatsApp] Resposta Z-API');
-
     return { key: { id: responseBody.zapiMessageId || responseBody.messageId || 'sent' } };
   }
 
-  /**
-   * Enviar imagem
-   */
   async enviarImagem(telefone, imageUrl, caption) {
     this._verificarConectado();
     const resp = await fetch(`${this.baseUrl}/send-image`, {
@@ -124,9 +104,6 @@ class WhatsAppConnection extends EventEmitter {
     return { key: { id: data.zapiMessageId || data.messageId || 'sent' } };
   }
 
-  /**
-   * Enviar áudio
-   */
   async enviarAudio(telefone, audioUrl) {
     this._verificarConectado();
     const resp = await fetch(`${this.baseUrl}/send-audio`, {
@@ -139,25 +116,30 @@ class WhatsAppConnection extends EventEmitter {
     return { key: { id: data.zapiMessageId || data.messageId || 'sent' } };
   }
 
-  /**
-   * Enviar documento
-   */
-  async enviarDocumento(telefone, documentUrl, fileName) {
+  async enviarVideo(telefone, videoUrl, caption) {
     this._verificarConectado();
-    const ext = fileName?.split('.').pop() || 'pdf';
-    const resp = await fetch(`${this.baseUrl}/send-document/${ext}`, {
+    const resp = await fetch(`${this.baseUrl}/send-video`, {
       method: 'POST',
       headers: this.headers,
-      body: JSON.stringify({ phone: telefone, document: documentUrl, fileName: fileName || 'arquivo' }),
+      body: JSON.stringify({ phone: telefone, video: videoUrl, caption: caption || '' }),
     });
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) throw new Error(data.message || `HTTP ${resp.status}`);
     return { key: { id: data.zapiMessageId || data.messageId || 'sent' } };
   }
 
-  /**
-   * Marcar como lida
-   */
+  async enviarDocumento(telefone, documentUrl, fileName) {
+    this._verificarConectado();
+    const resp = await fetch(`${this.baseUrl}/send-document/pdf`, {
+      method: 'POST',
+      headers: this.headers,
+      body: JSON.stringify({ phone: telefone, document: documentUrl, fileName: fileName || 'documento' }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.message || `HTTP ${resp.status}`);
+    return { key: { id: data.zapiMessageId || data.messageId || 'sent' } };
+  }
+
   async marcarComoLida(messageId, phone) {
     if (this.status !== 'conectado' || !messageId) return;
     try {
@@ -166,12 +148,9 @@ class WhatsAppConnection extends EventEmitter {
         headers: this.headers,
         body: JSON.stringify({ messageId, phone }),
       });
-    } catch { /* não crítico */ }
+    } catch { }
   }
 
-  /**
-   * Reagir a mensagem
-   */
   async reagirMensagem(messageId, phone, emoji) {
     this._verificarConectado();
     const resp = await fetch(`${this.baseUrl}/send-reaction`, {
@@ -184,9 +163,6 @@ class WhatsAppConnection extends EventEmitter {
     return data;
   }
 
-  /**
-   * Deletar mensagem
-   */
   async deletarMensagem(messageId, phone) {
     this._verificarConectado();
     const resp = await fetch(`${this.baseUrl}/delete-message`, {
@@ -200,8 +176,24 @@ class WhatsAppConnection extends EventEmitter {
   }
 
   /**
-   * Encaminhar mensagem — precisa do messageId, phone do chat original, e phoneTo destino
+   * Editar mensagem enviada — Z-API update-message
    */
+  async editarMensagem(messageId, phone, novoTexto) {
+    this._verificarConectado();
+    const resp = await fetch(`${this.baseUrl}/update-message`, {
+      method: 'PUT',
+      headers: this.headers,
+      body: JSON.stringify({ messageId, phone, message: novoTexto }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      logger.error({ status: resp.status, data, messageId }, '[WA] Erro update-message');
+      throw new Error(data.message || `HTTP ${resp.status}`);
+    }
+    logger.info({ messageId }, '[WA] Mensagem editada');
+    return data;
+  }
+
   async encaminharMensagem(messageId, phoneOrigem, phoneTo) {
     this._verificarConectado();
     const resp = await fetch(`${this.baseUrl}/forward-message`, {
@@ -217,9 +209,6 @@ class WhatsAppConnection extends EventEmitter {
     return data;
   }
 
-  /**
-   * Enviar sticker
-   */
   async enviarSticker(telefone, stickerUrl) {
     this._verificarConectado();
     const resp = await fetch(`${this.baseUrl}/send-sticker`, {
@@ -232,9 +221,6 @@ class WhatsAppConnection extends EventEmitter {
     return { key: { id: data.zapiMessageId || data.messageId || 'sent' } };
   }
 
-  /**
-   * Enviar link com preview
-   */
   async enviarLink(telefone, url, mensagem) {
     this._verificarConectado();
     const resp = await fetch(`${this.baseUrl}/send-link`, {
@@ -249,11 +235,7 @@ class WhatsAppConnection extends EventEmitter {
 
   _verificarConectado() {
     if (this.status !== 'conectado') {
-      // Tentar forçar se tem credenciais
-      if (this.instanceId && this.token) {
-        this.status = 'conectado';
-        return;
-      }
+      if (this.instanceId && this.token) { this.status = 'conectado'; return; }
       throw new Error('WhatsApp Z-API não conectada');
     }
   }
