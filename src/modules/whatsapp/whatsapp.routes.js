@@ -406,6 +406,9 @@ router.post('/webhook', async (req, res) => {
       isRevoked: body.isRevoked,
       isReaction: body.isReaction,
       isEdit: body.isEdit,
+      isNotification: body.isNotification,
+      notification: body.notification,
+      status: body.status,
       waitingMessage: body.waitingMessage,
     }, '[Webhook] Payload recebido');
 
@@ -435,21 +438,64 @@ router.post('/webhook', async (req, res) => {
       return;
     }
 
-    // ---- STATUS DE MENSAGEM ----
-    if (body.status && !body.phone) {
-      const statusMap = { 'SENT': 'enviada', 'RECEIVED': 'entregue', 'READ': 'lida', 'PLAYED': 'lida' };
+    // ---- STATUS DE MENSAGEM (includes DELETED!) ----
+    if (body.type === 'MessageStatusCallback' || (body.status && body.ids)) {
+      const statusMap = { 'SENT': 'enviada', 'RECEIVED': 'entregue', 'READ': 'lida', 'PLAYED': 'lida', 'READ_BY_ME': null };
+      const msgIds = body.ids || (body.id?.id ? [body.id.id] : [body.messageId].filter(Boolean));
+
+      // DELETED — mensagem apagada (pelo contato ou por mim)
+      if (body.status === 'DELETED' || body.status === 'REVOKED') {
+        const { query: dbQuery } = require('../../config/database');
+        for (const msgId of msgIds) {
+          const result = await dbQuery(
+            `UPDATE mensagens SET deletada = TRUE, deletada_por = 'contato'
+             WHERE wa_message_id = $1 AND deletada = FALSE RETURNING id, ticket_id`,
+            [msgId]
+          );
+          if (result.rows.length > 0) {
+            broadcast('mensagem:deletada', { mensagemId: result.rows[0].id, ticketId: result.rows[0].ticket_id });
+            await _invalidarCaches(result.rows[0].ticket_id);
+            logger.info({ msgId, dbId: result.rows[0].id }, '[Webhook] Mensagem apagada via status DELETED');
+          }
+        }
+        return;
+      }
+
       const novoStatus = statusMap[body.status];
-      const msgId = body.id?.id || body.messageId;
-      if (novoStatus && msgId) {
+      if (novoStatus && msgIds.length > 0) {
         const { atualizarStatusEnvio } = require('../messages/messages.service');
-        await atualizarStatusEnvio({ waMessageId: msgId, status: novoStatus });
-        broadcast('mensagem:status', { waMessageId: msgId, status: novoStatus });
+        for (const msgId of msgIds) {
+          await atualizarStatusEnvio({ waMessageId: msgId, status: novoStatus });
+        }
+        broadcast('mensagem:status', { waMessageId: msgIds[0], status: novoStatus });
       }
       return;
     }
 
-    // ---- IGNORAR notificações e status reply ----
-    if (body.isStatusReply || body.isNotification) return;
+    // ---- MENSAGEM APAGADA via notification REVOKE ----
+    if (body.notification === 'REVOKE' || body.notification === 'revoke' ||
+        (body.type === 'revoked' && !body.phone) ||
+        (body.isRevoked === true && !body.phone)) {
+      const msgId = body.messageId || body.id?.id || body.referenceMessageId || body.ids?.[0];
+      if (msgId) {
+        const { query: dbQuery } = require('../../config/database');
+        const result = await dbQuery(
+          `UPDATE mensagens SET deletada = TRUE, deletada_por = 'contato'
+           WHERE wa_message_id = $1 AND deletada = FALSE RETURNING id, ticket_id`,
+          [msgId]
+        );
+        if (result.rows.length > 0) {
+          broadcast('mensagem:deletada', { mensagemId: result.rows[0].id, ticketId: result.rows[0].ticket_id });
+          await _invalidarCaches(result.rows[0].ticket_id);
+          logger.info({ msgId, dbId: result.rows[0].id }, '[Webhook] Mensagem apagada via notification REVOKE');
+        }
+      }
+      return;
+    }
+
+    // ---- IGNORAR notificações genéricas (mas NÃO REVOKE — já tratado acima) ----
+    if (body.isStatusReply) return;
+    if (body.isNotification && body.notification !== 'REVOKE' && body.notification !== 'revoke') return;
 
     // ---- REAÇÃO RECEBIDA ----
     if (body.isReaction || body.type === 'reaction') {
@@ -572,6 +618,8 @@ router.post('/webhook', async (req, res) => {
         body.type === 'revoked' ||
         body.type === 'delete' ||
         body.type === 'protocolMessage' ||
+        body.notification === 'REVOKE' ||
+        body.notification === 'revoke' ||
         (body.protocolMessage && body.protocolMessage.type === 0)
       );
 
