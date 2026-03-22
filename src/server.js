@@ -35,7 +35,7 @@ const { initUsersRoutes } = require('./modules/users');
 const { initQuickRepliesRoutes } = require('./modules/quick-replies');
 const { initTagsRoutes } = require('./modules/tags');
 const { initConfigRoutes } = require('./modules/config');
-const { initAiRoutes } = require('./modules/ai');
+const { initAiRoutes, initIaTables } = require('./modules/ai');
 const { initReportsRoutes } = require('./modules/reports');
 
 // WebSocket
@@ -156,6 +156,7 @@ async function iniciar() {
     await initQueuesTables(pool);      // filas, tags, auditoria, etc
     await initTicketsTables(pool);     // depende de contatos e filas
     await initMessagesTables(pool);    // depende de tickets
+    await initIaTables();               // tabelas de IA/aprendizado
     logger.info('[Server] Migrations executadas');
 
     // 4. Seed do admin padrão (se não existir)
@@ -237,6 +238,28 @@ function _iniciarCronJobs() {
   }, 2 * 60 * 1000);
 
   logger.info('[Server] Cron jobs iniciados (mapear LIDs: 2min após boot, depois a cada 5min até acabar)');
+
+  // ---- Cron IA: aprender de tickets fechados ----
+  // A cada 6 horas, analisa tickets fechados e extrai exemplos
+  setInterval(async () => {
+    try {
+      const { aprenderDeTicketsFechados } = require('./modules/ai/ai.service');
+      await aprenderDeTicketsFechados();
+    } catch (err) {
+      logger.error({ err: err.message }, '[Cron] Erro no aprendizado IA');
+    }
+  }, 6 * 60 * 60 * 1000); // 6 horas
+
+  // Primeira execução do aprendizado 10 min após boot
+  setTimeout(async () => {
+    try {
+      const { aprenderDeTicketsFechados } = require('./modules/ai/ai.service');
+      await aprenderDeTicketsFechados();
+      logger.info('[Cron] Aprendizado IA executado (boot)');
+    } catch (err) {
+      logger.error({ err: err.message }, '[Cron] Erro no aprendizado IA (boot)');
+    }
+  }, 10 * 60 * 1000); // 10 min
 }
 
 /**
