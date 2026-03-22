@@ -11,6 +11,16 @@ const logger = require('../../shared/logger');
 
 const router = Router();
 
+// Helper: invalidar cache Redis após envio/edição/deleção de mensagem
+async function _invalidarCaches(ticketId) {
+  try {
+    const { invalidarCacheMensagens } = require('../messages/messages.service');
+    const { invalidarCacheListagens } = require('../tickets/tickets.service');
+    await invalidarCacheMensagens(parseInt(ticketId));
+    await invalidarCacheListagens();
+  } catch (_) {}
+}
+
 // GET /api/whatsapp/status
 router.get('/status', verificarToken, (req, res) => {
   res.json(whatsappService.obterStatus());
@@ -36,6 +46,9 @@ router.post('/enviar', verificarToken, limiteSensivel, async (req, res, next) =>
       quotedMessageId: quoted_message_id || null,
     });
 
+    // Invalidar cache ANTES do broadcast
+    await _invalidarCaches(ticket_id);
+
     broadcast('mensagem:nova', { ...mensagem, ticket_id: parseInt(ticket_id) });
 
     res.json({ sucesso: true, mensagem });
@@ -51,6 +64,7 @@ router.post('/enviar-audio', verificarToken, limiteSensivel, async (req, res, ne
     if (!ticket_id || !audio_base64) return res.status(400).json({ erro: 'ticket_id e audio_base64 são obrigatórios' });
 
     const mensagem = await whatsappService.enviarAudio({ ticketId: ticket_id, audioBase64: audio_base64, usuarioId: req.usuario.id });
+    await _invalidarCaches(ticket_id);
     broadcast('mensagem:nova', { ...mensagem, ticket_id: parseInt(ticket_id) });
     res.json({ sucesso: true, mensagem });
   } catch (err) {
@@ -65,6 +79,7 @@ router.post('/enviar-imagem', verificarToken, limiteSensivel, async (req, res, n
     if (!ticket_id || !imagem_base64) return res.status(400).json({ erro: 'ticket_id e imagem_base64 são obrigatórios' });
 
     const mensagem = await whatsappService.enviarImagem({ ticketId: ticket_id, imagemBase64: imagem_base64, caption, usuarioId: req.usuario.id });
+    await _invalidarCaches(ticket_id);
     broadcast('mensagem:nova', { ...mensagem, ticket_id: parseInt(ticket_id) });
     res.json({ sucesso: true, mensagem });
   } catch (err) {
@@ -79,6 +94,7 @@ router.post('/enviar-video', verificarToken, limiteSensivel, async (req, res, ne
     if (!ticket_id || !video_base64) return res.status(400).json({ erro: 'ticket_id e video_base64 são obrigatórios' });
 
     const mensagem = await whatsappService.enviarVideo({ ticketId: ticket_id, videoBase64: video_base64, caption, usuarioId: req.usuario.id });
+    await _invalidarCaches(ticket_id);
     broadcast('mensagem:nova', { ...mensagem, ticket_id: parseInt(ticket_id) });
     res.json({ sucesso: true, mensagem });
   } catch (err) {
@@ -93,6 +109,7 @@ router.post('/enviar-documento', verificarToken, limiteSensivel, async (req, res
     if (!ticket_id || !documento_base64) return res.status(400).json({ erro: 'ticket_id e documento_base64 são obrigatórios' });
 
     const mensagem = await whatsappService.enviarDocumento({ ticketId: ticket_id, documentoBase64: documento_base64, fileName: file_name, usuarioId: req.usuario.id });
+    await _invalidarCaches(ticket_id);
     broadcast('mensagem:nova', { ...mensagem, ticket_id: parseInt(ticket_id) });
     res.json({ sucesso: true, mensagem });
   } catch (err) {
@@ -157,6 +174,7 @@ router.post('/reagir', verificarToken, async (req, res, next) => {
 router.delete('/deletar-mensagem/:id', verificarToken, async (req, res, next) => {
   try {
     const resultado = await whatsappService.deletarMensagem(req.params.id);
+    broadcast('mensagem:deletada', { mensagemId: resultado.mensagemId, ticketId: resultado.ticketId });
     res.json(resultado);
   } catch (err) {
     next(err);
@@ -183,6 +201,7 @@ router.post('/enviar-sticker', verificarToken, async (req, res, next) => {
     if (!ticketId || !stickerUrl) return res.status(400).json({ erro: 'ticketId e stickerUrl são obrigatórios' });
 
     const resultado = await whatsappService.enviarSticker(ticketId, stickerUrl);
+    await _invalidarCaches(ticketId);
     broadcast('mensagem:nova', { ticket_id: parseInt(ticketId), tipo: 'sticker', media_url: stickerUrl, is_from_me: true });
     res.json(resultado);
   } catch (err) {
@@ -491,6 +510,7 @@ router.post('/webhook', async (req, res) => {
         );
         if (result.rows.length > 0) {
           broadcast('mensagem:deletada', { mensagemId: result.rows[0].id, ticketId: result.rows[0].ticket_id });
+          await _invalidarCaches(result.rows[0].ticket_id);
           logger.info({ msgId, dbId: result.rows[0].id }, '[Webhook] Mensagem marcada como apagada');
         }
       }
@@ -580,6 +600,7 @@ router.post('/webhook', async (req, res) => {
           );
           if (result.rows.length > 0) {
             broadcast('mensagem:deletada', { mensagemId: result.rows[0].id, ticketId: result.rows[0].ticket_id });
+            await _invalidarCaches(result.rows[0].ticket_id);
             logger.info({ msgId, dbId: result.rows[0].id, deletadaPor: fromMe ? 'atendente' : 'contato' }, '[Webhook] Mensagem marcada como apagada');
           }
         }
@@ -735,6 +756,7 @@ router.post('/webhook', async (req, res) => {
           );
           if (result.rows.length > 0) {
             broadcast('mensagem:deletada', { mensagemId: result.rows[0].id, ticketId: result.rows[0].ticket_id });
+            await _invalidarCaches(result.rows[0].ticket_id);
             logger.info({ refMsgId, dbId: result.rows[0].id }, '[Webhook] Revoke capturado via last-resort');
           }
         }

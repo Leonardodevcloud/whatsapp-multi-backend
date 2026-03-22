@@ -716,7 +716,11 @@ async function deletarMensagem(mensagemId) {
   const telefone = await _obterDestinoDoTicket(msg.rows[0].ticket_id);
   await conexaoWA.deletarMensagem(msg.rows[0].wa_message_id, telefone);
   await query(`UPDATE mensagens SET deletada = TRUE, deletada_por = 'atendente' WHERE id = $1`, [mensagemId]);
-  return { sucesso: true };
+
+  const { invalidarCacheMensagens } = require('../messages/messages.service');
+  await invalidarCacheMensagens(msg.rows[0].ticket_id);
+
+  return { sucesso: true, mensagemId: parseInt(mensagemId), ticketId: msg.rows[0].ticket_id };
 }
 
 async function encaminharMensagem(mensagemId, telefoneDestino) {
