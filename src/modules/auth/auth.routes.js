@@ -24,6 +24,7 @@ router.post('/login', limiteLogin, async (req, res, next) => {
         nome: usuario.nome,
         email: usuario.email,
         perfil: usuario.perfil,
+        avatar_url: usuario.avatar_url || null,
       },
     });
   } catch (err) {
@@ -77,6 +78,16 @@ router.get('/ws-token', verificarToken, (req, res) => {
     perfil: req.usuario.perfil,
   });
   res.json({ token: accessToken });
+});
+
+// GET /api/auth/me — dados atualizados do usuário logado
+router.get('/me', verificarToken, async (req, res) => {
+  try {
+    const { query: dbQuery } = require('../../config/database');
+    const result = await dbQuery(`SELECT id, nome, email, perfil, avatar_url, online FROM usuarios WHERE id = $1`, [req.usuario.id]);
+    if (result.rows.length === 0) return res.status(404).json({ erro: 'Usuário não encontrado' });
+    res.json(result.rows[0]);
+  } catch { res.status(500).json({ erro: 'Erro interno' }); }
 });
 
 // POST /api/auth/usuarios — criar atendente (admin only)
