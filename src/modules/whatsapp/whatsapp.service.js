@@ -598,8 +598,12 @@ async function _classificarTicketAuto(ticketId, textoMensagem) {
     const textoLimpo = (textoMensagem || '').trim().toLowerCase();
     if (textoLimpo.length < 8) return;
 
+    // Se o ticket JÁ tem tag, não sobrescrever até finalizar
+    const ticketAtual = await query(`SELECT assunto FROM tickets WHERE id = $1`, [ticketId]);
+    if (ticketAtual.rows[0]?.assunto) return;
+
     // Buscar regras ativas
-    const regras = await query(`SELECT id, tag, palavras_chave FROM ia_tags_regras WHERE ativo = TRUE`);
+    const regras = await query(`SELECT id, tag, palavras_chave, cor FROM ia_tags_regras WHERE ativo = TRUE`);
     if (regras.rows.length === 0) return;
 
     // Tokenizar texto (palavras individuais)
@@ -620,8 +624,12 @@ async function _classificarTicketAuto(ticketId, textoMensagem) {
 
     if (!melhorMatch || maxHits === 0) return;
 
-    // Aplicar tag
-    await query(`UPDATE tickets SET assunto = $1, atualizado_em = NOW() WHERE id = $2`, [melhorMatch.tag, ticketId]);
+    // Aplicar tag + cor
+    // Garantir coluna assunto_cor existe
+    await query(`ALTER TABLE tickets ADD COLUMN IF NOT EXISTS assunto_cor VARCHAR(20)`).catch(() => {});
+
+    await query(`UPDATE tickets SET assunto = $1, assunto_cor = $2, atualizado_em = NOW() WHERE id = $3`,
+      [melhorMatch.tag, melhorMatch.cor || '#7c3aed', ticketId]);
     await query(`UPDATE ia_tags_regras SET acertos = acertos + 1 WHERE id = $1`, [melhorMatch.id]);
 
     try {
@@ -630,7 +638,7 @@ async function _classificarTicketAuto(ticketId, textoMensagem) {
     } catch (_) {}
 
     const { broadcast } = require('../../websocket');
-    broadcast('ticket:atualizado', { ticketId, assunto: melhorMatch.tag });
+    broadcast('ticket:atualizado', { ticketId, assunto: melhorMatch.tag, assunto_cor: melhorMatch.cor || '#7c3aed' });
 
     logger.info({ ticketId, tag: melhorMatch.tag, hits: maxHits }, '[IA Auto] Ticket classificado por keyword');
   } catch (err) {

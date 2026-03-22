@@ -126,7 +126,7 @@ async function _executarQueryListagem({ cursor, limite = 50, status, filaId, usu
   // Isto evita N+1: uma única contagem é feita via JOIN
   const resultado = await query(
     `SELECT t.id, t.contato_id, t.fila_id, t.usuario_id, t.status, t.protocolo,
-            t.assunto, t.prioridade, t.ultima_mensagem_em, t.ultima_mensagem_preview,
+            t.assunto, t.assunto_cor, t.prioridade, t.ultima_mensagem_em, t.ultima_mensagem_preview,
             t.is_bot, t.avaliacao, t.tempo_primeira_resposta_seg, t.criado_em, t.atualizado_em,
             c.nome as contato_nome, c.telefone as contato_telefone, c.avatar_url as contato_avatar,
             f.nome as fila_nome, f.cor as fila_cor,
