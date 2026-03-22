@@ -398,6 +398,12 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
 
     await client.query('COMMIT');
 
+    // Invalidar cache de tickets (sidebar) — preview e badge mudaram
+    try {
+      const { invalidarCacheListagens } = require('../tickets/tickets.service');
+      await invalidarCacheListagens();
+    } catch (_) {}
+
     // ============================================================
     // UPLOAD MÍDIA PARA R2 (em background — não bloqueia a entrega)
     // Converte URL temporária Z-API → URL permanente R2
@@ -605,6 +611,10 @@ async function _atualizarPreviewTicket(ticketId, preview) {
     `UPDATE tickets SET ultima_mensagem_em = NOW(), ultima_mensagem_preview = $1, atualizado_em = NOW() WHERE id = $2`,
     [preview.substring(0, 200), ticketId]
   );
+  try {
+    const { invalidarCacheListagens } = require('../tickets/tickets.service');
+    await invalidarCacheListagens();
+  } catch (_) {}
 }
 
 /**

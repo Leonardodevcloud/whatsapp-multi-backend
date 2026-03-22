@@ -140,6 +140,13 @@ async function marcarComoLidas({ ticketId, usuarioId }) {
   );
 
   await invalidarCacheMensagens(tId);
+
+  // Invalidar cache da listagem de tickets (badge de não lidas muda)
+  try {
+    const { invalidarCacheListagens } = require('../tickets/tickets.service');
+    await invalidarCacheListagens();
+  } catch (_) {}
+
   return { atualizadas: resultado.rowCount };
 }
 
