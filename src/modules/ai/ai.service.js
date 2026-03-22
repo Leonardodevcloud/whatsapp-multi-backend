@@ -285,24 +285,52 @@ async function aprenderDeTicketsFechados() {
 
   for (const ticket of tickets.rows) {
     try {
-      // Buscar mensagens do ticket
+      // Buscar mensagens do ticket (APENAS mensagens reais, sem sistema/internas)
       const msgs = await query(
         `SELECT corpo, is_from_me FROM mensagens
          WHERE ticket_id = $1 AND deletada = FALSE
+           AND tipo != 'sistema'
+           AND is_internal = FALSE
+           AND corpo IS NOT NULL
+           AND corpo != ''
+           AND corpo NOT LIKE '%finalizou o chamado%'
+           AND corpo NOT LIKE '%visualizou o chamado%'
+           AND corpo NOT LIKE '%atribuído%'
+           AND corpo NOT LIKE '%transferi%'
          ORDER BY id ASC`,
         [ticket.id]
       );
 
-      if (msgs.rows.length < 3) continue; // Precisa de pelo menos 3 mensagens
+      if (msgs.rows.length < 2) continue;
 
-      // Extrair pares pergunta-resposta
+      // Agrupar mensagens consecutivas do mesmo remetente em blocos
+      // Ex: [C:"oi", C:"quero saber", C:"do meu saque", A:"Bom dia! Seu saldo..."]
+      // Vira: [{from:'contato', texto:'oi\nquero saber\ndo meu saque'}, {from:'atendente', texto:'Bom dia!...'}]
+      const blocos = [];
+      let blocoAtual = { fromMe: msgs.rows[0].is_from_me, partes: [msgs.rows[0].corpo] };
+
+      for (let i = 1; i < msgs.rows.length; i++) {
+        if (msgs.rows[i].is_from_me === blocoAtual.fromMe) {
+          blocoAtual.partes.push(msgs.rows[i].corpo);
+        } else {
+          blocos.push({ fromMe: blocoAtual.fromMe, texto: blocoAtual.partes.filter(Boolean).join('\n') });
+          blocoAtual = { fromMe: msgs.rows[i].is_from_me, partes: [msgs.rows[i].corpo] };
+        }
+      }
+      blocos.push({ fromMe: blocoAtual.fromMe, texto: blocoAtual.partes.filter(Boolean).join('\n') });
+
+      // Extrair pares bloco-contato → bloco-atendente
       const pares = [];
-      for (let i = 0; i < msgs.rows.length - 1; i++) {
-        const msg = msgs.rows[i];
-        const next = msgs.rows[i + 1];
-        // Contato pergunta → Atendente responde
-        if (!msg.is_from_me && next.is_from_me && msg.corpo?.length > 5 && next.corpo?.length > 10) {
-          pares.push({ pergunta: msg.corpo, resposta: next.corpo });
+      for (let i = 0; i < blocos.length - 1; i++) {
+        const bloco = blocos[i];
+        const next = blocos[i + 1];
+        if (!bloco.fromMe && next.fromMe
+            && bloco.texto?.length > 10
+            && next.texto?.length > 15
+            && !next.texto.startsWith('http')
+            && !bloco.texto.match(/^(oi|olá|bom dia|boa tarde|boa noite|ok|tá|sim|não)[\s!?.]*$/i)
+        ) {
+          pares.push({ pergunta: bloco.texto, resposta: next.texto });
         }
       }
 
