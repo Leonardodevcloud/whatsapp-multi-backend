@@ -90,6 +90,43 @@ router.get('/me', verificarToken, async (req, res) => {
   } catch { res.status(500).json({ erro: 'Erro interno' }); }
 });
 
+// PATCH /api/auth/me — qualquer usuário edita seu próprio perfil (nome, senha, avatar)
+router.patch('/me', verificarToken, async (req, res) => {
+  try {
+    const { query: dbQuery } = require('../../config/database');
+    const bcrypt = require('bcrypt');
+    const { nome, senha, avatar_base64 } = req.body;
+
+    const updates = [];
+    const params = [];
+    let idx = 1;
+
+    if (nome?.trim()) { updates.push(`nome = $${idx++}`); params.push(nome.trim()); }
+    if (senha && senha.length >= 8) {
+      const hash = await bcrypt.hash(senha, 12);
+      updates.push(`senha_hash = $${idx++}`); params.push(hash);
+    }
+
+    // Upload avatar se enviado
+    if (avatar_base64) {
+      try {
+        const { uploadMidia } = require('../../shared/mediaUpload');
+        const url = await uploadMidia(avatar_base64, 'imagem', `avatars/user-${req.usuario.id}`);
+        updates.push(`avatar_url = $${idx++}`); params.push(url);
+      } catch {}
+    }
+
+    if (updates.length === 0) return res.status(400).json({ erro: 'Nenhum campo válido' });
+
+    updates.push('atualizado_em = NOW()');
+    params.push(req.usuario.id);
+    await dbQuery(`UPDATE usuarios SET ${updates.join(', ')} WHERE id = $${idx}`, params);
+
+    const result = await dbQuery(`SELECT id, nome, email, perfil, avatar_url, online FROM usuarios WHERE id = $1`, [req.usuario.id]);
+    res.json(result.rows[0]);
+  } catch (err) { res.status(500).json({ erro: err.message }); }
+});
+
 // POST /api/auth/usuarios — criar atendente (admin only)
 router.post('/usuarios', verificarToken, verificarAdmin, async (req, res, next) => {
   try {

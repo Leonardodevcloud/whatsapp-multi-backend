@@ -130,7 +130,7 @@ async function _executarQueryListagem({ cursor, limite = 50, status, filaId, usu
             t.is_bot, t.avaliacao, t.tempo_primeira_resposta_seg, t.criado_em, t.atualizado_em,
             c.nome as contato_nome, c.telefone as contato_telefone, c.avatar_url as contato_avatar,
             f.nome as fila_nome, f.cor as fila_cor,
-            u.nome as atendente_nome,
+            u.nome as atendente_nome, u.avatar_url as atendente_avatar,
             COALESCE(nl.total, 0)::int as nao_lidas
      FROM tickets t
      LEFT JOIN contatos c ON c.id = t.contato_id
@@ -164,7 +164,7 @@ async function obterTicketPorId(ticketId) {
             c.nome as contato_nome, c.telefone as contato_telefone,
             c.avatar_url as contato_avatar, c.email as contato_email, c.notas as contato_notas,
             f.nome as fila_nome, f.cor as fila_cor,
-            u.nome as atendente_nome, u.email as atendente_email,
+            u.nome as atendente_nome, u.avatar_url as atendente_avatar, u.email as atendente_email,
             COALESCE(
               (SELECT json_agg(json_build_object('id', tg.id, 'nome', tg.nome, 'cor', tg.cor))
                FROM ticket_tags tt JOIN tags tg ON tg.id = tt.tag_id
