@@ -61,12 +61,12 @@ async function enviarMensagemTexto({ ticketId, texto, usuarioId, quotedMessageId
       `INSERT INTO mensagens (ticket_id, usuario_id, corpo, tipo, wa_message_id, is_from_me, status_envio, quoted_message_id)
        VALUES ($1, $2, $3, 'texto', $4, TRUE, 'enviada', $5)
        RETURNING id, corpo, tipo, is_from_me, status_envio, criado_em, quoted_message_id`,
-      [ticketId, usuarioId, texto, sent.key.id, quotedMessageId || null]
+      [ticketId, usuarioId, textoComPrefixo, sent.key.id, quotedMessageId || null]
     );
 
     await query(
       `UPDATE tickets SET ultima_mensagem_em = NOW(), ultima_mensagem_preview = $1, atualizado_em = NOW() WHERE id = $2`,
-      [texto.substring(0, 200), ticketId]
+      [textoComPrefixo.substring(0, 200), ticketId]
     );
 
     await _calcularTempoRespostaSeNecessario(ticketId);
