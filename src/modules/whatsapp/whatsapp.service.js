@@ -866,26 +866,36 @@ async function listarStickersRecebidos({ limite = 50 }) {
 
 /**
  * Editar mensagem enviada (dentro de 15 minutos)
- * Nota: Z-API não suporta edição de mensagem ainda — edita só no banco/UI
+ * Z-API: POST /send-text com editMessageId
  */
 async function editarMensagem({ mensagemId, novoTexto, usuarioId }) {
   const msg = await query(
-    `SELECT m.id, m.is_from_me, m.criado_em, m.ticket_id
+    `SELECT m.id, m.wa_message_id, m.is_from_me, m.criado_em, m.ticket_id, c.telefone, c.lid
      FROM mensagens m
+     JOIN tickets t ON t.id = m.ticket_id
+     JOIN contatos c ON c.id = t.contato_id
      WHERE m.id = $1`,
     [mensagemId]
   );
   if (msg.rows.length === 0) throw new AppError('Mensagem não encontrada', 404);
-  const { is_from_me, criado_em, ticket_id } = msg.rows[0];
+  const { wa_message_id, is_from_me, criado_em, ticket_id, telefone, lid } = msg.rows[0];
 
   if (!is_from_me) throw new AppError('Só é possível editar mensagens enviadas', 400);
 
   const diffMin = (Date.now() - new Date(criado_em).getTime()) / 60000;
   if (diffMin > 15) throw new AppError('Só é possível editar mensagens dentro de 15 minutos', 400);
 
+  if (!wa_message_id || wa_message_id === 'sent') throw new AppError('Mensagem sem ID do WhatsApp', 400);
+
+  const destino = lid ? `${lid}@lid` : telefone;
+
+  // Editar no WhatsApp via Z-API (send-text com editMessageId)
+  await conexaoWA.editarMensagem(wa_message_id, destino, novoTexto);
+
+  // Atualizar no banco
   await query(`UPDATE mensagens SET corpo = $1, atualizado_em = NOW() WHERE id = $2`, [novoTexto, mensagemId]);
 
-  logger.info({ mensagemId, ticketId: ticket_id }, '[WA] Mensagem editada (local)');
+  logger.info({ mensagemId, ticketId: ticket_id }, '[WA] Mensagem editada');
   return { id: mensagemId, corpo: novoTexto, ticket_id };
 }
 

@@ -163,34 +163,36 @@ class WhatsAppConnection extends EventEmitter {
     return data;
   }
 
-  async deletarMensagem(messageId, phone) {
+  async deletarMensagem(messageId, phone, owner = true) {
     this._verificarConectado();
-    const resp = await fetch(`${this.baseUrl}/delete-message`, {
+    // Z-API usa query params no DELETE, não body
+    const params = new URLSearchParams({ messageId, phone, owner: String(owner) });
+    const resp = await fetch(`${this.baseUrl}/messages?${params}`, {
       method: 'DELETE',
       headers: this.headers,
-      body: JSON.stringify({ messageId, phone, owner: true }),
     });
+    if (resp.status === 204) return {};
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) throw new Error(data.message || `HTTP ${resp.status}`);
     return data;
   }
 
   /**
-   * Editar mensagem enviada — Z-API update-message
+   * Editar mensagem enviada — Z-API usa editMessageId no /send-text
    */
   async editarMensagem(messageId, phone, novoTexto) {
     this._verificarConectado();
-    const resp = await fetch(`${this.baseUrl}/update-message`, {
+    const resp = await fetch(`${this.baseUrl}/send-text`, {
       method: 'POST',
       headers: this.headers,
-      body: JSON.stringify({ messageId, phone, message: novoTexto }),
+      body: JSON.stringify({ phone, message: novoTexto, editMessageId: messageId }),
     });
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) {
-      logger.error({ status: resp.status, data, messageId }, '[WA] Erro update-message');
+      logger.error({ status: resp.status, data, messageId }, '[WA] Erro ao editar mensagem');
       throw new Error(data.message || `HTTP ${resp.status}`);
     }
-    logger.info({ messageId }, '[WA] Mensagem editada');
+    logger.info({ messageId }, '[WA] Mensagem editada via send-text + editMessageId');
     return data;
   }
 
