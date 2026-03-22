@@ -895,6 +895,10 @@ async function editarMensagem({ mensagemId, novoTexto, usuarioId }) {
   // Atualizar no banco
   await query(`UPDATE mensagens SET corpo = $1, atualizado_em = NOW() WHERE id = $2`, [novoTexto, mensagemId]);
 
+  // Invalidar cache Redis
+  const { invalidarCacheMensagens } = require('../messages/messages.service');
+  await invalidarCacheMensagens(ticket_id);
+
   logger.info({ mensagemId, ticketId: ticket_id }, '[WA] Mensagem editada');
   return { id: mensagemId, corpo: novoTexto, ticket_id };
 }

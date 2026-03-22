@@ -513,10 +513,15 @@ router.post('/webhook', async (req, res) => {
       const isGroup = body.isGroup || false;
       const fromMe = body.fromMe || false;
 
-      // ---- MENSAGEM EDITADA PELO CONTATO (isEdit=true) ----
-      if (body.isEdit === true && body.phone) {
-        const msgId = body.messageId || body.id?.id;
-        const novoTexto = body.text?.message || body.text?.body || (typeof body.text === 'string' ? body.text : '') || body.message;
+      // ---- MENSAGEM EDITADA PELO CONTATO ----
+      // Z-API pode enviar isEdit como boolean, string, ou campo editedMessage
+      const isEditEvent = body.isEdit === true || body.isEdit === 'true' || body.type === 'editedMessage' || !!body.editedMessage;
+      if (isEditEvent && body.phone) {
+        const msgId = body.messageId || body.id?.id || body.editedMessage?.id;
+        const novoTexto = body.text?.message || body.text?.body || (typeof body.text === 'string' ? body.text : '') || body.message || body.editedMessage?.message || body.body;
+
+        logger.info({ isEdit: body.isEdit, type: body.type, msgId, novoTexto: novoTexto?.substring(0, 50), bodyKeys: Object.keys(body) }, '[Webhook] Evento de edição detectado');
+
         if (msgId && novoTexto) {
           const { query: dbQuery } = require('../../config/database');
           const result = await dbQuery(
@@ -525,6 +530,10 @@ router.post('/webhook', async (req, res) => {
             [novoTexto, msgId]
           );
           if (result.rows.length > 0) {
+            // Invalidar cache Redis
+            const { invalidarCacheMensagens } = require('../messages/messages.service');
+            await invalidarCacheMensagens(result.rows[0].ticket_id);
+
             broadcast('mensagem:editada', {
               mensagemId: result.rows[0].id,
               ticketId: result.rows[0].ticket_id,
@@ -697,8 +706,9 @@ router.post('/webhook', async (req, res) => {
         corpo = body.buttonsResponseMessage.selectedButtonId || body.buttonsResponseMessage.selectedDisplayText || '';
       }
 
-      // Se não conseguiu extrair nada, logar detalhes
+      // Se não conseguiu extrair nada, tentar capturar como edit/revoke
       if (!corpo && !mediaUrl) {
+        // DEBUG: logar body COMPLETO pra diagnosticar formato Z-API
         logger.warn({
           bodyKeys: Object.keys(body),
           waMessageId: waMessageIdFinal,
@@ -708,7 +718,26 @@ router.post('/webhook', async (req, res) => {
           isEdit: body.isEdit,
           type: body.type,
           fromMe: body.fromMe,
-        }, '[Webhook] Mensagem sem corpo detectável');
+          editedMessage: body.editedMessage ? JSON.stringify(body.editedMessage).substring(0, 200) : null,
+          protocolMessage: body.protocolMessage ? JSON.stringify(body.protocolMessage).substring(0, 200) : null,
+          referenceMessageId: body.referenceMessageId,
+          bodyFull: JSON.stringify(body).substring(0, 500),
+        }, '[Webhook] Mensagem sem corpo detectável — DEBUG COMPLETO');
+
+        // LAST RESORT: se tem referenceMessageId + nenhum conteúdo, é revoke
+        const refMsgId = body.referenceMessageId || body.protocolMessage?.key?.id;
+        if (refMsgId) {
+          const { query: dbQuery } = require('../../config/database');
+          const result = await dbQuery(
+            `UPDATE mensagens SET deletada = TRUE, deletada_por = $1
+             WHERE wa_message_id = $2 AND deletada = FALSE RETURNING id, ticket_id`,
+            [fromMe ? 'atendente' : 'contato', refMsgId]
+          );
+          if (result.rows.length > 0) {
+            broadcast('mensagem:deletada', { mensagemId: result.rows[0].id, ticketId: result.rows[0].ticket_id });
+            logger.info({ refMsgId, dbId: result.rows[0].id }, '[Webhook] Revoke capturado via last-resort');
+          }
+        }
         return;
       }
 
