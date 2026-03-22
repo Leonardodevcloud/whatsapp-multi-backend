@@ -87,10 +87,13 @@ router.get('/insights', verificarToken, verificarAdminOuSupervisor, async (req, 
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        system_instruction: { parts: [{ text: `Você é um analista de operações de atendimento ao cliente.
+        system_instruction: { parts: [{ text: `Você é um analista de operações de atendimento ao cliente via WhatsApp.
 Analise os dados e gere 3-5 insights CONCISOS e ACIONÁVEIS em português.
 Cada insight deve ter: tipo (positivo/alerta/sugestao), titulo (máx 10 palavras), descricao (máx 30 palavras).
-Foque em: gargalos, oportunidades, tendências, dimensionamento de equipe.
+Use o termo "chamados" em vez de "tickets".
+NÃO mencione CSAT pois não usamos essa métrica.
+Foque em: volume de chamados, tempos de resposta, gargalos, oportunidades de melhoria, dimensionamento de equipe.
+Se os dados estiverem zerados, sugira que é um período sem dados e recomende operar normalmente.
 Responda APENAS em JSON: {"insights": [{"tipo": "alerta", "titulo": "...", "descricao": "..."}]}` }] },
         contents: [{ parts: [{ text: `Dashboard: ${JSON.stringify(dashboard)}
 Picos por hora: ${JSON.stringify(picos.slice(0, 12))}

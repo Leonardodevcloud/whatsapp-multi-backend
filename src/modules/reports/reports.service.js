@@ -199,7 +199,6 @@ async function picosAtendimento({ dias = 30 } = {}) {
     tickets_total: parseInt(r.tickets),
     tickets_media_dia: Math.round(parseInt(r.tickets) / totalDias * 10) / 10,
     atendentes_ativos: parseInt(r.atendentes_ativos),
-    atendentes_recomendados: Math.max(1, Math.ceil(parseInt(r.tickets) / totalDias / 3)),
     tpr_medio: parseInt(r.tpr_medio) || 0,
     tr_medio: parseInt(r.tr_medio) || 0,
   }));
