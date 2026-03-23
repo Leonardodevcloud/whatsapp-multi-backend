@@ -1,26 +1,36 @@
 // src/middleware/rateLimiter.js
-// Rate limiting — ajustado pra proxy Vercel
+// Rate limiting — por usuário JWT (não por IP, pois Vercel proxy compartilha IPs)
 
 const rateLimit = require('express-rate-limit');
 
-// Rate limit geral: 1000 req/min por IP (alto por causa do proxy Vercel)
+// Rate limit geral: 300 req/min POR USUÁRIO logado
 const limiteGeral = rateLimit({
   windowMs: 60 * 1000,
-  max: 1000,
+  max: 300,
   standardHeaders: true,
   legacyHeaders: false,
   message: { erro: 'Muitas requisições. Tente novamente em instantes.' },
   keyGenerator: (req) => {
-    // Usar X-Forwarded-For do Vercel pra pegar IP real
-    const realIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip;
-    return realIp;
+    // Extrair user ID do cookie JWT (decode sem verificar, só pra key)
+    if (req.cookies?.access_token) {
+      try {
+        const payload = JSON.parse(Buffer.from(req.cookies.access_token.split('.')[1], 'base64').toString());
+        if (payload.id) return `user_${payload.id}`;
+      } catch {}
+    }
+    // Fallback: IP real
+    return req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip;
+  },
+  skip: (req) => {
+    // Não limitar webhooks e health check
+    return req.path === '/api/whatsapp/webhook' || req.path === '/health';
   },
 });
 
-// Rate limit para endpoints sensíveis: 60 req/min por usuário
+// Rate limit para endpoints sensíveis: 120 req/min por usuário
 const limiteSensivel = rateLimit({
   windowMs: 60 * 1000,
-  max: 60,
+  max: 120,
   standardHeaders: true,
   legacyHeaders: false,
   message: { erro: 'Muitas requisições neste endpoint. Aguarde.' },
