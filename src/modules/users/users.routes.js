@@ -6,7 +6,7 @@ const { verificarToken, verificarAdmin, verificarAdminOuSupervisor } = require('
 const router = Router();
 
 // GET /api/users
-router.get('/', verificarToken, verificarAdminOuSupervisor, async (req, res, next) => {
+router.get('/', verificarToken, async (req, res, next) => {
   try {
     const usuarios = await usersService.listarUsuarios();
     res.json(usuarios);
