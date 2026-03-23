@@ -1017,11 +1017,33 @@ router.get('/grupo-membros/:ticketId', verificarToken, async (req, res) => {
     if (!response.ok) return res.json({ membros: [], ehGrupo: true });
 
     const data = await response.json();
-    const membros = (data.participants || []).map(p => ({
-      telefone: p.phone || p.id?.replace('@c.us', ''),
-      nome: p.name || p.short || p.phone || 'Desconhecido',
-      admin: p.admin === 'admin' || p.admin === 'superadmin',
-    }));
+    const participantes = data.participants || [];
+
+    // Extrair telefones dos membros
+    const telefonesRaw = participantes.map(p => p.phone || p.id?.replace('@c.us', '').replace('@s.whatsapp.net', '') || '');
+
+    // Buscar nomes salvos na base de contatos
+    let contatosSalvos = {};
+    if (telefonesRaw.length > 0) {
+      const placeholders = telefonesRaw.map((_, i) => `$${i + 1}`).join(',');
+      const saved = await dbQuery(
+        `SELECT telefone, nome FROM contatos WHERE telefone IN (${placeholders})`,
+        telefonesRaw
+      );
+      for (const r of saved.rows) {
+        contatosSalvos[r.telefone] = r.nome;
+      }
+    }
+
+    const membros = participantes.map(p => {
+      const tel = p.phone || p.id?.replace('@c.us', '').replace('@s.whatsapp.net', '') || '';
+      const nomeSalvo = contatosSalvos[tel];
+      return {
+        telefone: tel,
+        nome: nomeSalvo || p.name || p.short || tel || 'Desconhecido',
+        admin: p.admin === 'admin' || p.admin === 'superadmin',
+      };
+    });
 
     res.json({ membros, ehGrupo: true, nomeGrupo: data.subject || '' });
   } catch (err) {
