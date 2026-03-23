@@ -445,6 +445,13 @@ async function resolverTicket({ ticketId, usuarioId, ip, motivoId, motivoTexto }
     [tId, usuarioId, `${nomeAtendente} finalizou o chamado às ${hora}`]
   );
 
+  // Registrar ciclo completo na tabela de ciclos
+  await query(
+    `INSERT INTO ticket_ciclos (ticket_id, usuario_id, contato_id, fila_id, aberto_em, fechado_em, tempo_primeira_resposta_seg, tempo_resolucao_seg)
+     VALUES ($1, $2, $3, $4, $5, NOW(), $6, $7)`,
+    [tId, usuarioId, ticket.rows[0].contato_id, ticket.rows[0].fila_id, ticket.rows[0].criado_em, ticket.rows[0].tempo_primeira_resposta_seg, tempoResolucao]
+  );
+
   await registrarAuditoria({
     usuarioId,
     acao: 'resolver_ticket',
@@ -464,9 +471,15 @@ async function resolverTicket({ ticketId, usuarioId, ip, motivoId, motivoTexto }
 async function fecharTicket({ ticketId, usuarioId, ip }) {
   const tId = validarId(ticketId);
 
+  // Buscar dados do ticket ANTES de fechar (para registrar o ciclo)
+  const ticketData = await query(`SELECT contato_id, fila_id, criado_em, tempo_primeira_resposta_seg FROM tickets WHERE id = $1`, [tId]);
+  const tk = ticketData.rows[0];
+
+  const tempoResolucao = tk ? Math.floor((Date.now() - new Date(tk.criado_em).getTime()) / 1000) : null;
+
   await query(
-    `UPDATE tickets SET status = 'fechado', fechado_em = NOW(), atualizado_em = NOW(), assunto = NULL, assunto_cor = NULL, prioridade = NULL WHERE id = $1`,
-    [tId]
+    `UPDATE tickets SET status = 'fechado', fechado_em = NOW(), atualizado_em = NOW(), tempo_resolucao_seg = COALESCE(tempo_resolucao_seg, $2), assunto = NULL, assunto_cor = NULL, prioridade = NULL WHERE id = $1`,
+    [tId, tempoResolucao]
   );
 
   await query(
@@ -474,6 +487,15 @@ async function fecharTicket({ ticketId, usuarioId, ip }) {
      VALUES ($1, $2, 'Ticket fechado', 'sistema', TRUE, TRUE)`,
     [tId, usuarioId]
   );
+
+  // Registrar ciclo completo
+  if (tk) {
+    await query(
+      `INSERT INTO ticket_ciclos (ticket_id, usuario_id, contato_id, fila_id, aberto_em, fechado_em, tempo_primeira_resposta_seg, tempo_resolucao_seg)
+       VALUES ($1, $2, $3, $4, $5, NOW(), $6, $7)`,
+      [tId, usuarioId, tk.contato_id, tk.fila_id, tk.criado_em, tk.tempo_primeira_resposta_seg, tempoResolucao]
+    );
+  }
 
   await registrarAuditoria({
     usuarioId,

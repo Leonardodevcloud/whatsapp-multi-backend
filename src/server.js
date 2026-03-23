@@ -36,7 +36,7 @@ const { initQuickRepliesRoutes } = require('./modules/quick-replies');
 const { initTagsRoutes } = require('./modules/tags');
 const { initConfigRoutes } = require('./modules/config');
 const { initAiRoutes, initIaTables } = require('./modules/ai');
-const { initReportsRoutes } = require('./modules/reports');
+const { initReportsRoutes, initTicketCiclosTables } = require('./modules/reports');
 
 // WebSocket
 const { inicializarWebSocket, broadcast, obterContagemConectados } = require('./websocket');
@@ -156,6 +156,7 @@ async function iniciar() {
     await initQueuesTables(pool);      // filas, tags, auditoria, etc
     await initTicketsTables(pool);     // depende de contatos e filas
     await initMessagesTables(pool);    // depende de tickets
+    await initTicketCiclosTables(pool); // ciclos de atendimento (depende de tickets)
     await initIaTables();               // tabelas de IA/aprendizado
     logger.info('[Server] Migrations executadas');
 
