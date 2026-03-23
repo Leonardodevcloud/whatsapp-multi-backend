@@ -20,15 +20,18 @@ async function enviarMensagemTexto({ ticketId, texto, usuarioId, quotedMessageId
   }
 
   const resultado = await query(
-    `SELECT c.telefone, c.lid FROM tickets t JOIN contatos c ON c.id = t.contato_id WHERE t.id = $1`,
+    `SELECT c.telefone, c.lid, c.is_group FROM tickets t JOIN contatos c ON c.id = t.contato_id WHERE t.id = $1`,
     [ticketId]
   );
   if (resultado.rows.length === 0) throw new AppError('Ticket não encontrado', 404);
 
-  const { telefone, lid } = resultado.rows[0];
-  // Grupos: telefone contém '-' (ex: 5571999-1234567890) — NUNCA usar LID pra grupo
-  const ehGrupo = telefone && telefone.includes('-');
+  const { telefone, lid, is_group } = resultado.rows[0];
+  // Grupos: NUNCA usar LID — sempre telefone (que é o group ID do Z-API)
+  // Detecta por: coluna is_group, ou telefone começa com 120363, ou contém '-'
+  const ehGrupo = is_group || (telefone && (telefone.startsWith('120363') || telefone.includes('-') || telefone.length > 15));
   const destino = ehGrupo ? telefone : (lid ? `${lid}@lid` : telefone);
+
+  logger.info({ ticketId, telefone, lid, ehGrupo, destino }, '[WA] Destino calculado');
 
   try {
     const ticketCheck = await query(`SELECT status, usuario_id FROM tickets WHERE id = $1`, [ticketId]);
@@ -319,15 +322,16 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
 
       // ON CONFLICT: se telefone já existe, retorna o existente em vez de crashar
       const novo = await client.query(
-        `INSERT INTO contatos (nome, telefone, avatar_url, lid)
-         VALUES ($1, $2, $3, $4)
+        `INSERT INTO contatos (nome, telefone, avatar_url, lid, is_group)
+         VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT (telefone) DO UPDATE SET
            lid = COALESCE(contatos.lid, EXCLUDED.lid),
            nome = CASE WHEN EXCLUDED.nome ~ '^\d+$' THEN contatos.nome ELSE COALESCE(EXCLUDED.nome, contatos.nome) END,
            avatar_url = COALESCE(contatos.avatar_url, EXCLUDED.avatar_url),
+           is_group = COALESCE(EXCLUDED.is_group, contatos.is_group),
            atualizado_em = NOW()
          RETURNING id`,
-        [nome || telefoneLimpo, telefoneLimpo, avatarUrl, isGroup ? null : lidValue]
+        [nome || telefoneLimpo, telefoneLimpo, avatarUrl, isGroup ? null : lidValue, !!isGroup]
       );
       contatoId = novo.rows[0].id;
       logger.info({ contatoId, telefone: telefoneLimpo, nome, lid: lidValue, isGroup }, '[WA] 🆕 Contato criado/encontrado');

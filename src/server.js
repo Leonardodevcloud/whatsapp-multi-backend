@@ -162,6 +162,11 @@ async function iniciar() {
     // 4. Seed do admin padrão (se não existir)
     await _criarAdminPadrao();
 
+    // 4b. Garantir coluna is_group em contatos
+    await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS is_group BOOLEAN DEFAULT FALSE`).catch(() => {});
+    // Marcar grupos existentes pelo padrão do telefone
+    await pool.query(`UPDATE contatos SET is_group = TRUE WHERE is_group IS NOT TRUE AND telefone LIKE '120363%'`).catch(() => {});
+
     // 5. Inicializar WebSocket
     inicializarWebSocket(server);
     logger.info('[Server] WebSocket inicializado');
