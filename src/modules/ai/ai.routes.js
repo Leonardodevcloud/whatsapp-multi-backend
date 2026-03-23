@@ -95,16 +95,27 @@ router.get('/instrucoes', verificarToken, verificarAdmin, async (req, res) => {
 
 router.post('/instrucoes', verificarToken, verificarAdmin, async (req, res) => {
   try {
+    console.log('[IA] POST instrucoes body:', JSON.stringify(req.body).substring(0, 200));
     const { titulo, conteudo, ordem } = req.body;
     if (!titulo || !conteudo) return res.status(400).json({ erro: 'titulo e conteudo são obrigatórios' });
-    res.json(await ia.criarInstrucao({ titulo, conteudo, ordem }));
-  } catch (err) { res.status(500).json({ erro: err.message }); }
+    const result = await ia.criarInstrucao({ titulo, conteudo, ordem });
+    console.log('[IA] Instrução criada:', result?.id);
+    res.json(result);
+  } catch (err) {
+    console.error('[IA] ERRO POST instrucoes:', err.message, err.stack);
+    res.status(500).json({ erro: err.message });
+  }
 });
 
 router.put('/instrucoes/:id', verificarToken, verificarAdmin, async (req, res) => {
   try {
-    res.json(await ia.atualizarInstrucao(req.params.id, req.body));
-  } catch (err) { res.status(500).json({ erro: err.message }); }
+    console.log('[IA] PUT instrucoes', req.params.id, JSON.stringify(req.body).substring(0, 200));
+    const result = await ia.atualizarInstrucao(req.params.id, req.body);
+    res.json(result);
+  } catch (err) {
+    console.error('[IA] ERRO PUT instrucoes:', err.message, err.stack);
+    res.status(500).json({ erro: err.message });
+  }
 });
 
 router.delete('/instrucoes/:id', verificarToken, verificarAdmin, async (req, res) => {
