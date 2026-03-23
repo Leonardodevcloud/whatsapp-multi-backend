@@ -45,7 +45,7 @@ function validarId(id, nomeCampo = 'id') {
 function validarPaginacao(cursor, limite = 50) {
   return {
     cursor: cursor ? parseInt(cursor, 10) : null,
-    limite: Math.min(Math.max(parseInt(limite, 10) || 50, 1), 100),
+    limite: Math.max(parseInt(limite, 10) || 500, 1),
   };
 }
 
