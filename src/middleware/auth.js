@@ -79,7 +79,7 @@ function setarCookiesAuth(res, accessToken, refreshToken) {
   res.cookie('access_token', accessToken, {
     httpOnly: true,
     secure: isProduction,
-    sameSite: isProduction ? 'none' : 'lax',
+    sameSite: 'lax',
     maxAge: 15 * 60 * 1000, // 15 minutos
     path: '/',
   });
@@ -87,9 +87,9 @@ function setarCookiesAuth(res, accessToken, refreshToken) {
   res.cookie('refresh_token', refreshToken, {
     httpOnly: true,
     secure: isProduction,
-    sameSite: isProduction ? 'none' : 'lax',
+    sameSite: 'lax',
     maxAge: 7 * 24 * 60 * 60 * 1000, // 7 dias
-    path: '/api/auth/refresh',
+    path: '/',
   });
 }
 
@@ -98,7 +98,7 @@ function setarCookiesAuth(res, accessToken, refreshToken) {
  */
 function limparCookiesAuth(res) {
   res.clearCookie('access_token', { path: '/' });
-  res.clearCookie('refresh_token', { path: '/api/auth/refresh' });
+  res.clearCookie('refresh_token', { path: '/' });
 }
 
 module.exports = {
