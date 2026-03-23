@@ -73,9 +73,15 @@ class WhatsAppConnection extends EventEmitter {
       payload.messageId = opts.quotedMessageId;
     }
 
-    // Menções em grupo — array de telefones ou ['all']
+    // Menções em grupo
     if (opts.mentioned && opts.mentioned.length > 0) {
-      payload.mentioned = opts.mentioned;
+      if (opts.mentioned.includes('all')) {
+        // @todos — Z-API usa mentionsEveryOne
+        payload.mentionsEveryOne = true;
+      } else {
+        // Menções individuais
+        payload.mentioned = opts.mentioned;
+      }
     }
 
     logger.info({ telefone, textoLen: texto.length, quote: !!opts.quotedMessageId, mentions: opts.mentioned?.length || 0 }, '[WhatsApp] Enviando texto');
