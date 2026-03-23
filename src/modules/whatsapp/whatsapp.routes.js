@@ -82,7 +82,7 @@ router.get('/qr', verificarToken, (req, res) => {
 // POST /api/whatsapp/enviar
 router.post('/enviar', verificarToken, limiteSensivel, async (req, res, next) => {
   try {
-    const { ticket_id, texto, quoted_message_id } = req.body;
+    const { ticket_id, texto, quoted_message_id, mentioned } = req.body;
     if (!ticket_id || !texto?.trim()) {
       return res.status(400).json({ erro: 'ticket_id e texto são obrigatórios' });
     }
@@ -92,6 +92,7 @@ router.post('/enviar', verificarToken, limiteSensivel, async (req, res, next) =>
       texto: texto.trim(),
       usuarioId: req.usuario.id,
       quotedMessageId: quoted_message_id || null,
+      mentioned: mentioned || [],
     });
 
     // Invalidar cache ANTES do broadcast
@@ -988,6 +989,45 @@ router.post('/webhook', async (req, res) => {
 // ============================================================
 // HORÁRIO DE ATENDIMENTO — config
 // ============================================================
+
+// GET /api/whatsapp/grupo-membros/:ticketId — membros do grupo
+router.get('/grupo-membros/:ticketId', verificarToken, async (req, res) => {
+  try {
+    const { query: dbQuery } = require('../../config/database');
+    const { ticketId } = req.params;
+
+    // Buscar telefone do contato (grupo)
+    const result = await dbQuery(
+      `SELECT c.telefone FROM tickets t JOIN contatos c ON c.id = t.contato_id WHERE t.id = $1`,
+      [ticketId]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ erro: 'Ticket não encontrado' });
+
+    const telefone = result.rows[0].telefone;
+    const ehGrupo = telefone && (telefone.startsWith('120363') || telefone.includes('-'));
+    if (!ehGrupo) return res.json({ membros: [], ehGrupo: false });
+
+    // Buscar metadata do grupo via Z-API
+    const conn = require('./whatsapp.connection');
+    const groupPhone = telefone.includes('-group') ? telefone : `${telefone}-group`;
+    const response = await fetch(`${conn.baseUrl}/group-metadata/${groupPhone}`, {
+      headers: conn.headers,
+    });
+
+    if (!response.ok) return res.json({ membros: [], ehGrupo: true });
+
+    const data = await response.json();
+    const membros = (data.participants || []).map(p => ({
+      telefone: p.phone || p.id?.replace('@c.us', ''),
+      nome: p.name || p.short || p.phone || 'Desconhecido',
+      admin: p.admin === 'admin' || p.admin === 'superadmin',
+    }));
+
+    res.json({ membros, ehGrupo: true, nomeGrupo: data.subject || '' });
+  } catch (err) {
+    res.json({ membros: [], ehGrupo: false, erro: err.message });
+  }
+});
 
 // GET /api/whatsapp/horario
 router.get('/horario', verificarToken, async (req, res) => {

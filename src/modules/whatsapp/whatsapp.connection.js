@@ -73,7 +73,12 @@ class WhatsAppConnection extends EventEmitter {
       payload.messageId = opts.quotedMessageId;
     }
 
-    logger.info({ telefone, textoLen: texto.length, quote: !!opts.quotedMessageId }, '[WhatsApp] Enviando texto');
+    // Menções em grupo — array de telefones ou ['all']
+    if (opts.mentioned && opts.mentioned.length > 0) {
+      payload.mentioned = opts.mentioned;
+    }
+
+    logger.info({ telefone, textoLen: texto.length, quote: !!opts.quotedMessageId, mentions: opts.mentioned?.length || 0 }, '[WhatsApp] Enviando texto');
 
     const response = await fetch(`${this.baseUrl}/send-text`, {
       method: 'POST',
@@ -163,36 +168,34 @@ class WhatsAppConnection extends EventEmitter {
     return data;
   }
 
-  async deletarMensagem(messageId, phone, owner = true) {
+  async deletarMensagem(messageId, phone) {
     this._verificarConectado();
-    // Z-API usa query params no DELETE, não body
-    const params = new URLSearchParams({ messageId, phone, owner: String(owner) });
-    const resp = await fetch(`${this.baseUrl}/messages?${params}`, {
+    const resp = await fetch(`${this.baseUrl}/delete-message`, {
       method: 'DELETE',
       headers: this.headers,
+      body: JSON.stringify({ messageId, phone, owner: true }),
     });
-    if (resp.status === 204) return {};
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) throw new Error(data.message || `HTTP ${resp.status}`);
     return data;
   }
 
   /**
-   * Editar mensagem enviada — Z-API usa editMessageId no /send-text
+   * Editar mensagem enviada — Z-API update-message
    */
   async editarMensagem(messageId, phone, novoTexto) {
     this._verificarConectado();
-    const resp = await fetch(`${this.baseUrl}/send-text`, {
+    const resp = await fetch(`${this.baseUrl}/update-message`, {
       method: 'POST',
       headers: this.headers,
-      body: JSON.stringify({ phone, message: novoTexto, editMessageId: messageId }),
+      body: JSON.stringify({ messageId, phone, message: novoTexto }),
     });
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) {
-      logger.error({ status: resp.status, data, messageId }, '[WA] Erro ao editar mensagem');
+      logger.error({ status: resp.status, data, messageId }, '[WA] Erro update-message');
       throw new Error(data.message || `HTTP ${resp.status}`);
     }
-    logger.info({ messageId }, '[WA] Mensagem editada via send-text + editMessageId');
+    logger.info({ messageId }, '[WA] Mensagem editada');
     return data;
   }
 
@@ -208,18 +211,6 @@ class WhatsAppConnection extends EventEmitter {
       logger.error({ status: resp.status, data, messageId, phoneOrigem, phoneTo }, '[WA] Erro forward-message');
       throw new Error(data.message || `HTTP ${resp.status}`);
     }
-    return data;
-  }
-
-  async enviarContato(telefone, contactName, contactPhone) {
-    this._verificarConectado();
-    const resp = await fetch(`${this.baseUrl}/send-contact`, {
-      method: 'POST',
-      headers: this.headers,
-      body: JSON.stringify({ phone: telefone, contactName, contactPhone }),
-    });
-    const data = await resp.json().catch(() => ({}));
-    if (!resp.ok) throw new Error(data.message || `HTTP ${resp.status}`);
     return data;
   }
 

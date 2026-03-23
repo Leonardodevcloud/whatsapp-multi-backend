@@ -11,7 +11,7 @@ const { uploadMidia } = require('../../shared/mediaUpload');
 // ============================================================
 // ENVIAR MENSAGEM DE TEXTO
 // ============================================================
-async function enviarMensagemTexto({ ticketId, texto, usuarioId, quotedMessageId }) {
+async function enviarMensagemTexto({ ticketId, texto, usuarioId, quotedMessageId, mentioned }) {
   if (conexaoWA.status !== 'conectado' && conexaoWA.instanceId && conexaoWA.token) {
     conexaoWA.status = 'conectado';
   }
@@ -70,12 +70,12 @@ async function enviarMensagemTexto({ ticketId, texto, usuarioId, quotedMessageId
     // Enviar com fallback: LID → telefone
     let sent;
     try {
-      sent = await conexaoWA.enviarTexto(destino, textoComPrefixo, { quotedMessageId: waQuotedId });
+      sent = await conexaoWA.enviarTexto(destino, textoComPrefixo, { quotedMessageId: waQuotedId, mentioned: mentioned || [] });
     } catch (errEnvio) {
       // Se falhou com LID, tentar com telefone direto
       if (lid && destino !== telefone) {
         logger.warn({ destino, telefone }, '[WA] Falha com LID, tentando com telefone');
-        sent = await conexaoWA.enviarTexto(telefone, textoComPrefixo, { quotedMessageId: waQuotedId });
+        sent = await conexaoWA.enviarTexto(telefone, textoComPrefixo, { quotedMessageId: waQuotedId, mentioned: mentioned || [] });
       } else {
         throw errEnvio;
       }
