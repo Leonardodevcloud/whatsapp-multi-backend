@@ -26,11 +26,11 @@ async function enviarMensagemTexto({ ticketId, texto, usuarioId, quotedMessageId
   if (resultado.rows.length === 0) throw new AppError('Ticket não encontrado', 404);
 
   const { telefone, lid } = resultado.rows[0];
-  // Grupos Z-API: telefone começa com 120363 ou contém '-'
+  // Grupos Z-API: telefone começa com 120363 ou contém '-' — precisa sufixo @g.us
   const ehGrupo = telefone && (telefone.startsWith('120363') || telefone.includes('-'));
-  const destino = ehGrupo ? telefone : (lid ? `${lid}@lid` : telefone);
+  const destino = ehGrupo ? `${telefone}@g.us` : (lid ? `${lid}@lid` : telefone);
 
-  logger.info({ ticketId, telefone, lid, ehGrupo, destino }, '[WA] Destino calculado');
+  logger.info(`[WA] Destino: tel=${telefone} lid=${lid} ehGrupo=${ehGrupo} destino=${destino}`);
 
   try {
     const ticketCheck = await query(`SELECT status, usuario_id FROM tickets WHERE id = $1`, [ticketId]);
