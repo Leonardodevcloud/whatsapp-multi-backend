@@ -286,6 +286,22 @@ function _iniciarCronJobs() {
     }
   };
   setInterval(_checkResumoDiario, 5 * 60 * 1000); // Check a cada 5 min
+
+  // ---- Cron Inatividade: deslogar usuários sem atividade há 15 min ----
+  setInterval(async () => {
+    try {
+      const result = await pool.query(`
+        UPDATE usuarios SET online = FALSE
+        WHERE online = TRUE AND (ultimo_acesso IS NULL OR ultimo_acesso < NOW() - INTERVAL '15 minutes')
+        RETURNING id, nome
+      `);
+      if (result.rowCount > 0) {
+        logger.info(`[Cron] ${result.rowCount} usuário(s) marcados offline por inatividade: ${result.rows.map(r => r.nome).join(', ')}`);
+      }
+    } catch (err) {
+      logger.error({ err: err.message }, '[Cron] Erro no check de inatividade');
+    }
+  }, 2 * 60 * 1000); // Check a cada 2 min
 }
 
 /**

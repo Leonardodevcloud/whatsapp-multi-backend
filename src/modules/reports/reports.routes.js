@@ -6,7 +6,19 @@ const { verificarToken, verificarAdminOuSupervisor } = require('../../middleware
 const router = Router();
 
 router.get('/dashboard', verificarToken, async (req, res, next) => {
-  try { res.json(await reportsService.obterDashboard()); } catch (err) { next(err); }
+  try {
+    let { dataInicio, dataFim, dias } = req.query;
+    // Se receber dias, calcular dataInicio/dataFim
+    if (dias && !dataInicio) {
+      const d = parseInt(dias);
+      const fim = new Date();
+      const inicio = new Date();
+      inicio.setDate(inicio.getDate() - d);
+      dataInicio = inicio.toISOString().split('T')[0];
+      dataFim = fim.toISOString().split('T')[0];
+    }
+    res.json(await reportsService.obterDashboard({ dataInicio, dataFim }));
+  } catch (err) { next(err); }
 });
 
 router.get('/tickets-hora', verificarToken, async (req, res, next) => {

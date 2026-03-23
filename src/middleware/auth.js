@@ -9,6 +9,9 @@ const { ERROS, PERFIS } = require('../shared/constants');
 /**
  * Verificar token JWT do cookie httpOnly
  */
+// Cache de último update pra não bater no DB a cada request
+const _ultimoUpdate = new Map();
+
 function verificarToken(req, res, next) {
   const token = req.cookies?.access_token;
 
@@ -24,6 +27,16 @@ function verificarToken(req, res, next) {
       perfil: decoded.perfil,
       nome: decoded.nome,
     };
+
+    // Atualizar ultimo_acesso a cada 60s (debounce pra não sobrecarregar DB)
+    const agora = Date.now();
+    const ultimo = _ultimoUpdate.get(decoded.id) || 0;
+    if (agora - ultimo > 60000) {
+      _ultimoUpdate.set(decoded.id, agora);
+      const { query: dbQuery } = require('../config/database');
+      dbQuery(`UPDATE usuarios SET ultimo_acesso = NOW(), online = TRUE WHERE id = $1`, [decoded.id]).catch(() => {});
+    }
+
     next();
   } catch (err) {
     if (err.name === 'TokenExpiredError') {
