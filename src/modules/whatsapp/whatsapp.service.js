@@ -20,15 +20,14 @@ async function enviarMensagemTexto({ ticketId, texto, usuarioId, quotedMessageId
   }
 
   const resultado = await query(
-    `SELECT c.telefone, c.lid, c.is_group FROM tickets t JOIN contatos c ON c.id = t.contato_id WHERE t.id = $1`,
+    `SELECT c.telefone, c.lid FROM tickets t JOIN contatos c ON c.id = t.contato_id WHERE t.id = $1`,
     [ticketId]
   );
   if (resultado.rows.length === 0) throw new AppError('Ticket não encontrado', 404);
 
-  const { telefone, lid, is_group } = resultado.rows[0];
-  // Grupos: NUNCA usar LID — sempre telefone (que é o group ID do Z-API)
-  // Detecta por: coluna is_group, ou telefone começa com 120363, ou contém '-'
-  const ehGrupo = is_group || (telefone && (telefone.startsWith('120363') || telefone.includes('-') || telefone.length > 15));
+  const { telefone, lid } = resultado.rows[0];
+  // Grupos Z-API: telefone começa com 120363 ou contém '-'
+  const ehGrupo = telefone && (telefone.startsWith('120363') || telefone.includes('-'));
   const destino = ehGrupo ? telefone : (lid ? `${lid}@lid` : telefone);
 
   logger.info({ ticketId, telefone, lid, ehGrupo, destino }, '[WA] Destino calculado');
