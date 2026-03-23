@@ -208,6 +208,111 @@ router.post('/aprender-agora', verificarToken, verificarAdmin, async (req, res, 
 });
 
 // ============================================================
+// ============================================================
+// TRANSCRIÇÃO DE ÁUDIO
+// ============================================================
+
+// POST /api/ai/transcrever-audio-base64 — transcrever áudio via Gemini
+router.post('/transcrever-audio-base64', verificarToken, async (req, res) => {
+  try {
+    const { mensagem_id, audio_base64 } = req.body;
+    if (!audio_base64) return res.status(400).json({ erro: 'audio_base64 obrigatório' });
+
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return res.status(503).json({ erro: 'GEMINI_API_KEY não configurada' });
+
+    // Extrair mime type e data do base64
+    const match = audio_base64.match(/^data:(audio\/[^;]+);base64,(.+)$/);
+    const mimeType = match ? match[1] : 'audio/ogg';
+    const base64Data = match ? match[2] : audio_base64.replace(/^data:[^;]+;base64,/, '');
+
+    const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
+    const resp = await fetch(`${GEMINI_API}?key=${apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          parts: [
+            { inlineData: { mimeType, data: base64Data } },
+            { text: 'Transcreva este áudio para texto em português. Retorne APENAS o texto transcrito, sem explicações ou formatação.' }
+          ]
+        }],
+        generationConfig: { temperature: 0.1, maxOutputTokens: 2000 },
+      }),
+    });
+
+    if (!resp.ok) {
+      const err = await resp.text();
+      return res.status(500).json({ erro: 'Gemini falhou', detalhe: err });
+    }
+
+    const data = await resp.json();
+    const transcricao = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+
+    // Salvar transcrição no banco se tiver mensagem_id
+    if (mensagem_id && transcricao) {
+      const { query } = require('../../config/database');
+      await query(`UPDATE mensagens SET corpo = $1 WHERE id = $2 AND (corpo IS NULL OR corpo = '' OR corpo = '🎵 Áudio')`, [transcricao, mensagem_id]).catch(() => {});
+    }
+
+    res.json({ transcricao });
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
+  }
+});
+
+// POST /api/ai/transcrever-audio/:mensagemId — transcrever por ID (busca mídia do banco)
+router.post('/transcrever-audio/:mensagemId', verificarToken, async (req, res) => {
+  try {
+    const { query } = require('../../config/database');
+    const { mensagemId } = req.params;
+
+    const msg = await query(`SELECT media_url, corpo FROM mensagens WHERE id = $1`, [mensagemId]);
+    if (msg.rows.length === 0) return res.status(404).json({ erro: 'Mensagem não encontrada' });
+
+    const mediaUrl = msg.rows[0].media_url;
+    if (!mediaUrl) return res.status(400).json({ erro: 'Mensagem sem mídia' });
+
+    // Download do áudio
+    const audioResp = await fetch(mediaUrl);
+    if (!audioResp.ok) return res.status(500).json({ erro: 'Falha ao baixar áudio' });
+
+    const buffer = Buffer.from(await audioResp.arrayBuffer());
+    const base64Data = buffer.toString('base64');
+
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return res.status(503).json({ erro: 'GEMINI_API_KEY não configurada' });
+
+    const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
+    const resp = await fetch(`${GEMINI_API}?key=${apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          parts: [
+            { inlineData: { mimeType: 'audio/ogg', data: base64Data } },
+            { text: 'Transcreva este áudio para texto em português. Retorne APENAS o texto transcrito, sem explicações.' }
+          ]
+        }],
+        generationConfig: { temperature: 0.1, maxOutputTokens: 2000 },
+      }),
+    });
+
+    if (!resp.ok) return res.status(500).json({ erro: 'Gemini falhou' });
+
+    const data = await resp.json();
+    const transcricao = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+
+    if (transcricao) {
+      await query(`UPDATE mensagens SET corpo = $1 WHERE id = $2 AND (corpo IS NULL OR corpo = '' OR corpo = '🎵 Áudio')`, [transcricao, mensagemId]).catch(() => {});
+    }
+
+    res.json({ transcricao });
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
+  }
+});
+
 // CONFIG IA — toggles
 // ============================================================
 
