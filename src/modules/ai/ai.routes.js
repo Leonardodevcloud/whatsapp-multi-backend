@@ -17,14 +17,14 @@ router.post('/sugestao/:ticketId', verificarToken, async (req, res, next) => {
     // Frontend espera { sugestao: "texto" } (string, não array)
     const texto = resultado?.sugestoes?.[0] || resultado?.sugestao || resultado?.raw || 'Não foi possível gerar sugestão. Tente novamente.';
     res.json({ sugestao: texto });
-  } catch (err) { next(err); }
+  } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 router.get('/sugestao/:ticketId', verificarToken, async (req, res, next) => {
   try {
     const resultado = await ia.sugerirResposta(req.params.ticketId);
     const texto = resultado?.sugestoes?.[0] || resultado?.sugestao || resultado?.raw || 'Não foi possível gerar sugestão. Tente novamente.';
     res.json({ sugestao: texto });
-  } catch (err) { next(err); }
+  } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
 // GET /api/ai/resumo/:ticketId (AiPanel chama GET)
@@ -33,13 +33,13 @@ router.get('/resumo/:ticketId', verificarToken, async (req, res, next) => {
   try {
     const resultado = await ia.resumirTicket(req.params.ticketId);
     res.json({ resumo: resultado?.resumo || 'Sem resumo disponível.' });
-  } catch (err) { next(err); }
+  } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 router.post('/resumo/:ticketId', verificarToken, async (req, res, next) => {
   try {
     const resultado = await ia.resumirTicket(req.params.ticketId);
     res.json({ resumo: resultado?.resumo || 'Sem resumo disponível.' });
-  } catch (err) { next(err); }
+  } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
 // GET /api/ai/sentimento/:ticketId
@@ -47,7 +47,7 @@ router.get('/sentimento/:ticketId', verificarToken, async (req, res, next) => {
   try {
     const resultado = await ia.analisarSentimento(req.params.ticketId);
     res.json(resultado);
-  } catch (err) { next(err); }
+  } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
 // POST /api/ia/classificar/:ticketId
@@ -55,7 +55,7 @@ router.post('/classificar/:ticketId', verificarToken, async (req, res, next) => 
   try {
     const resultado = await ia.classificarTicket(req.params.ticketId);
     res.json(resultado);
-  } catch (err) { next(err); }
+  } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
 // POST /api/ia/melhorar-texto
@@ -66,7 +66,7 @@ router.post('/melhorar-texto', verificarToken, async (req, res, next) => {
     const resultado = await ia.melhorarTexto(texto.trim());
     // Frontend espera camelCase
     res.json({ textoMelhorado: resultado?.texto_melhorado || resultado?.textoMelhorado || texto.trim() });
-  } catch (err) { next(err); }
+  } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
 // POST /api/ia/feedback
@@ -74,7 +74,7 @@ router.post('/feedback', verificarToken, async (req, res, next) => {
   try {
     const resultado = await ia.registrarFeedback(req.body);
     res.json(resultado);
-  } catch (err) { next(err); }
+  } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
 // GET /api/ia/stats
@@ -82,36 +82,36 @@ router.get('/stats', verificarToken, verificarAdmin, async (req, res, next) => {
   try {
     const stats = await ia.obterStats();
     res.json(stats);
-  } catch (err) { next(err); }
+  } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
 // ============================================================
 // CRUD — Instruções (admin)
 // ============================================================
 
-router.get('/instrucoes', verificarToken, verificarAdmin, async (req, res, next) => {
-  try { res.json(await ia.listarInstrucoes()); } catch (err) { next(err); }
+router.get('/instrucoes', verificarToken, verificarAdmin, async (req, res) => {
+  try { res.json(await ia.listarInstrucoes()); } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
-router.post('/instrucoes', verificarToken, verificarAdmin, async (req, res, next) => {
+router.post('/instrucoes', verificarToken, verificarAdmin, async (req, res) => {
   try {
     const { titulo, conteudo, ordem } = req.body;
     if (!titulo || !conteudo) return res.status(400).json({ erro: 'titulo e conteudo são obrigatórios' });
     res.json(await ia.criarInstrucao({ titulo, conteudo, ordem }));
-  } catch (err) { next(err); }
+  } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
-router.put('/instrucoes/:id', verificarToken, verificarAdmin, async (req, res, next) => {
+router.put('/instrucoes/:id', verificarToken, verificarAdmin, async (req, res) => {
   try {
     res.json(await ia.atualizarInstrucao(req.params.id, req.body));
-  } catch (err) { next(err); }
+  } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
-router.delete('/instrucoes/:id', verificarToken, verificarAdmin, async (req, res, next) => {
+router.delete('/instrucoes/:id', verificarToken, verificarAdmin, async (req, res) => {
   try {
     await ia.deletarInstrucao(req.params.id);
     res.json({ sucesso: true });
-  } catch (err) { next(err); }
+  } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
 // ============================================================
@@ -119,7 +119,7 @@ router.delete('/instrucoes/:id', verificarToken, verificarAdmin, async (req, res
 // ============================================================
 
 router.get('/conhecimento', verificarToken, verificarAdmin, async (req, res, next) => {
-  try { res.json(await ia.listarConhecimento(req.query)); } catch (err) { next(err); }
+  try { res.json(await ia.listarConhecimento(req.query)); } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
 router.post('/conhecimento', verificarToken, verificarAdmin, async (req, res, next) => {
@@ -127,20 +127,20 @@ router.post('/conhecimento', verificarToken, verificarAdmin, async (req, res, ne
     const { categoria, pergunta, resposta } = req.body;
     if (!pergunta || !resposta) return res.status(400).json({ erro: 'pergunta e resposta são obrigatórios' });
     res.json(await ia.criarConhecimento({ categoria, pergunta, resposta }));
-  } catch (err) { next(err); }
+  } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
 router.put('/conhecimento/:id', verificarToken, verificarAdmin, async (req, res, next) => {
   try {
     res.json(await ia.atualizarConhecimento(req.params.id, req.body));
-  } catch (err) { next(err); }
+  } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
 router.delete('/conhecimento/:id', verificarToken, verificarAdmin, async (req, res, next) => {
   try {
     await ia.deletarConhecimento(req.params.id);
     res.json({ sucesso: true });
-  } catch (err) { next(err); }
+  } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
 // ============================================================
@@ -148,26 +148,26 @@ router.delete('/conhecimento/:id', verificarToken, verificarAdmin, async (req, r
 // ============================================================
 
 router.get('/exemplos', verificarToken, verificarAdmin, async (req, res, next) => {
-  try { res.json(await ia.listarExemplos(req.query)); } catch (err) { next(err); }
+  try { res.json(await ia.listarExemplos(req.query)); } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
 router.put('/exemplos/:id/aprovar', verificarToken, verificarAdmin, async (req, res, next) => {
   try {
     res.json(await ia.aprovarExemplo(req.params.id, { aprovado: true, resposta_corrigida: req.body.resposta_corrigida }));
-  } catch (err) { next(err); }
+  } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
 router.put('/exemplos/:id/rejeitar', verificarToken, verificarAdmin, async (req, res, next) => {
   try {
     res.json(await ia.aprovarExemplo(req.params.id, { aprovado: false }));
-  } catch (err) { next(err); }
+  } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
 router.delete('/exemplos/:id', verificarToken, verificarAdmin, async (req, res, next) => {
   try {
     await ia.deletarExemplo(req.params.id);
     res.json({ sucesso: true });
-  } catch (err) { next(err); }
+  } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
 // ============================================================
@@ -175,7 +175,7 @@ router.delete('/exemplos/:id', verificarToken, verificarAdmin, async (req, res, 
 // ============================================================
 
 router.get('/tags-regras', verificarToken, verificarAdmin, async (req, res, next) => {
-  try { res.json(await ia.listarTagsRegras()); } catch (err) { next(err); }
+  try { res.json(await ia.listarTagsRegras()); } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
 router.post('/tags-regras', verificarToken, verificarAdmin, async (req, res, next) => {
@@ -183,20 +183,20 @@ router.post('/tags-regras', verificarToken, verificarAdmin, async (req, res, nex
     const { tag, palavras_chave, descricao, cor } = req.body;
     if (!tag || !palavras_chave) return res.status(400).json({ erro: 'tag e palavras_chave são obrigatórios' });
     res.json(await ia.criarTagRegra({ tag, palavras_chave, descricao, cor }));
-  } catch (err) { next(err); }
+  } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
 router.put('/tags-regras/:id', verificarToken, verificarAdmin, async (req, res, next) => {
   try {
     res.json(await ia.atualizarTagRegra(req.params.id, req.body));
-  } catch (err) { next(err); }
+  } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
 router.delete('/tags-regras/:id', verificarToken, verificarAdmin, async (req, res, next) => {
   try {
     await ia.deletarTagRegra(req.params.id);
     res.json({ sucesso: true });
-  } catch (err) { next(err); }
+  } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
 // POST /api/ia/aprender-agora — forçar aprendizado manual
@@ -204,7 +204,7 @@ router.post('/aprender-agora', verificarToken, verificarAdmin, async (req, res, 
   try {
     await ia.aprenderDeTicketsFechados();
     res.json({ sucesso: true, mensagem: 'Aprendizado executado' });
-  } catch (err) { next(err); }
+  } catch (err) { res.status(500).json({ erro: err.message }); }
 });
 
 // ============================================================
