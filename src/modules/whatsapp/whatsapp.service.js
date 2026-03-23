@@ -26,7 +26,9 @@ async function enviarMensagemTexto({ ticketId, texto, usuarioId, quotedMessageId
   if (resultado.rows.length === 0) throw new AppError('Ticket não encontrado', 404);
 
   const { telefone, lid } = resultado.rows[0];
-  const destino = lid ? `${lid}@lid` : telefone;
+  // Grupos: telefone contém '-' (ex: 5571999-1234567890) — NUNCA usar LID pra grupo
+  const ehGrupo = telefone && telefone.includes('-');
+  const destino = ehGrupo ? telefone : (lid ? `${lid}@lid` : telefone);
 
   try {
     const ticketCheck = await query(`SELECT status, usuario_id FROM tickets WHERE id = $1`, [ticketId]);
@@ -348,7 +350,7 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
       ticketId = ticketResult.rows[0].id;
       if (ticketResult.rows[0].status === 'resolvido' && !fromMe) {
         await client.query(
-          `UPDATE tickets SET status = 'pendente', usuario_id = NULL, assunto = NULL, assunto_cor = NULL, atualizado_em = NOW() WHERE id = $1`,
+          `UPDATE tickets SET status = 'pendente', usuario_id = NULL, assunto = NULL, assunto_cor = NULL, prioridade = NULL, atualizado_em = NOW() WHERE id = $1`,
           [ticketId]
         );
       }

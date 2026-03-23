@@ -431,7 +431,7 @@ async function resolverTicket({ ticketId, usuarioId, ip, motivoId, motivoTexto }
   );
 
   await query(
-    `UPDATE tickets SET status = 'resolvido', tempo_resolucao_seg = $1, motivo_fechamento_id = $2, motivo_fechamento_texto = $3, assunto = NULL, assunto_cor = NULL, atualizado_em = NOW() WHERE id = $4`,
+    `UPDATE tickets SET status = 'resolvido', tempo_resolucao_seg = $1, motivo_fechamento_id = $2, motivo_fechamento_texto = $3, assunto = NULL, assunto_cor = NULL, prioridade = NULL, atualizado_em = NOW() WHERE id = $4`,
     [tempoResolucao, motivoId || null, motivoTexto || null, tId]
   );
 
@@ -465,7 +465,7 @@ async function fecharTicket({ ticketId, usuarioId, ip }) {
   const tId = validarId(ticketId);
 
   await query(
-    `UPDATE tickets SET status = 'fechado', fechado_em = NOW(), atualizado_em = NOW(), assunto = NULL, assunto_cor = NULL WHERE id = $1`,
+    `UPDATE tickets SET status = 'fechado', fechado_em = NOW(), atualizado_em = NOW(), assunto = NULL, assunto_cor = NULL, prioridade = NULL WHERE id = $1`,
     [tId]
   );
 
