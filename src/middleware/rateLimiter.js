@@ -1,40 +1,40 @@
 // src/middleware/rateLimiter.js
-// Rate limiting — otimizado para 15+ atendentes simultâneos
-// Key por usuario_id (não IP) — evita bloquear escritório inteiro
+// Rate limiting — ajustado pra proxy Vercel
 
 const rateLimit = require('express-rate-limit');
 
-// Rate limit geral: 300 req/min por usuário (ou IP se não logado)
-// 15 users fazendo ~20 req/min cada = 300 req/min total
-// Se todos estão no mesmo IP do escritório, o keyGenerator por usuario resolve
+// Rate limit geral: 1000 req/min por IP (alto por causa do proxy Vercel)
 const limiteGeral = rateLimit({
   windowMs: 60 * 1000,
-  max: 300,
+  max: 1000,
   standardHeaders: true,
   legacyHeaders: false,
   message: { erro: 'Muitas requisições. Tente novamente em instantes.' },
-  keyGenerator: (req) => req.usuario?.id ? `user_${req.usuario.id}` : req.ip,
+  keyGenerator: (req) => {
+    // Usar X-Forwarded-For do Vercel pra pegar IP real
+    const realIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip;
+    return realIp;
+  },
 });
 
-// Rate limit para envio de mensagens: 60 req/min por usuário
-// Um atendente ativo pode enviar 1 msg/seg em picos de conversa
+// Rate limit para endpoints sensíveis: 60 req/min por usuário
 const limiteSensivel = rateLimit({
   windowMs: 60 * 1000,
   max: 60,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { erro: 'Muitas mensagens enviadas. Aguarde alguns segundos.' },
-  keyGenerator: (req) => req.usuario?.id ? `user_send_${req.usuario.id}` : req.ip,
+  message: { erro: 'Muitas requisições neste endpoint. Aguarde.' },
+  keyGenerator: (req) => req.usuario?.id ? `user_${req.usuario.id}` : (req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip),
 });
 
-// Rate limit para login: 10 tentativas/15min
+// Rate limit para login: 20 tentativas/15min por IP real
 const limiteLogin = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 10,
+  max: 20,
   standardHeaders: true,
   legacyHeaders: false,
   message: { erro: 'Muitas tentativas de login. Aguarde 15 minutos.' },
-  keyGenerator: (req) => req.ip,
+  keyGenerator: (req) => req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip,
 });
 
 module.exports = { limiteGeral, limiteSensivel, limiteLogin };

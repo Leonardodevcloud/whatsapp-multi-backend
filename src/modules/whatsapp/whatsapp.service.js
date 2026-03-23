@@ -36,7 +36,9 @@ async function enviarMensagemTexto({ ticketId, texto, usuarioId, quotedMessageId
 
   try {
     const ticketCheck = await query(`SELECT status, usuario_id FROM tickets WHERE id = $1`, [ticketId]);
-    if (ticketCheck.rows[0]?.status === 'pendente') {
+    const ticketData = ticketCheck.rows[0];
+
+    if (ticketData?.status === 'pendente') {
       await query(
         `UPDATE tickets SET status = 'aberto', usuario_id = $1, atualizado_em = NOW() WHERE id = $2`,
         [usuarioId, ticketId]
@@ -47,6 +49,10 @@ async function enviarMensagemTexto({ ticketId, texto, usuarioId, quotedMessageId
       const hora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Bahia' });
       await registrarMensagemSistema({ ticketId, corpo: `${nomeAtendente} iniciou o atendimento às ${hora}`, usuarioId });
       logger.info({ ticketId, usuarioId }, '[WA] Chamado auto-aceito');
+    } else if (ticketData?.usuario_id && ticketData.usuario_id !== usuarioId) {
+      // Reatribuir ticket se outro usuário envia mensagem
+      await query(`UPDATE tickets SET usuario_id = $1, atualizado_em = NOW() WHERE id = $2`, [usuarioId, ticketId]);
+      logger.info({ ticketId, de: ticketData.usuario_id, para: usuarioId }, '[WA] Chamado reatribuído ao remetente');
     }
 
     // Buscar wa_message_id da mensagem citada pra enviar pro Z-API
@@ -61,7 +67,19 @@ async function enviarMensagemTexto({ ticketId, texto, usuarioId, quotedMessageId
     const nomeAtendente2 = nomeResult2.rows[0]?.nome || 'Atendente';
     const textoComPrefixo = `*${nomeAtendente2}:*\n${texto}`;
 
-    const sent = await conexaoWA.enviarTexto(destino, textoComPrefixo, { quotedMessageId: waQuotedId });
+    // Enviar com fallback: LID → telefone
+    let sent;
+    try {
+      sent = await conexaoWA.enviarTexto(destino, textoComPrefixo, { quotedMessageId: waQuotedId });
+    } catch (errEnvio) {
+      // Se falhou com LID, tentar com telefone direto
+      if (lid && destino !== telefone) {
+        logger.warn({ destino, telefone }, '[WA] Falha com LID, tentando com telefone');
+        sent = await conexaoWA.enviarTexto(telefone, textoComPrefixo, { quotedMessageId: waQuotedId });
+      } else {
+        throw errEnvio;
+      }
+    }
 
     const msgResult = await query(
       `INSERT INTO mensagens (ticket_id, usuario_id, corpo, tipo, wa_message_id, is_from_me, status_envio, quoted_message_id)
