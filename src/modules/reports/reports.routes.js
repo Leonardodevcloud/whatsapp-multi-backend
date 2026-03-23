@@ -108,7 +108,7 @@ Se os dados estiverem zerados, sugira que é um período sem dados e recomende o
 Responda APENAS em JSON: {"insights": [{"tipo": "alerta", "titulo": "...", "descricao": "..."}]}` }] },
         contents: [{ parts: [{ text: `Dashboard: ${JSON.stringify(dashboard)}
 Picos por hora: ${JSON.stringify(picos.slice(0, 12))}
-Performance atendentes: ${JSON.stringify(performance.map(p => ({ nome: p.nome, chamados: p.tickets_total, concluidos: p.concluidos, tpr: p.tpr_medio })))}
+Performance atendentes: ${JSON.stringify(performance.map(p => ({ nome: p.nome, chamados: p.chamados, tpr: p.tpr_medio, tma: p.tma_medio })))}
 Tempos resposta: ${JSON.stringify(tempos)}` }] }],
         generationConfig: { temperature: 0.3, maxOutputTokens: 500, responseMimeType: 'application/json' },
       }),

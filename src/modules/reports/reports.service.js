@@ -153,29 +153,49 @@ async function ticketsPorFila() {
 // ── Performance dos atendentes ──────────────────────────
 
 async function performanceAtendentes({ dias = 30 } = {}) {
-  const resultado = await query(`
+  // 1. Dados base dos atendentes + tickets ativos + médias de TPR/TMA
+  const base = await query(`
     SELECT u.id, u.nome, u.avatar_url, u.online,
-      COUNT(t.id) as tickets_total,
-      ROUND(AVG(t.tempo_primeira_resposta_seg) FILTER (WHERE t.tempo_primeira_resposta_seg IS NOT NULL)) as tpr_medio,
-      ROUND(AVG(t.tempo_resolucao_seg) FILTER (WHERE t.tempo_resolucao_seg IS NOT NULL)) as tr_medio,
-      COUNT(t.id) FILTER (WHERE t.status IN ('aberto', 'aguardando')) as tickets_ativos
+      COUNT(t.id) FILTER (WHERE t.status IN ('aberto', 'aguardando')) as tickets_ativos,
+      ROUND(AVG(t.tempo_primeira_resposta_seg) FILTER (WHERE t.tempo_primeira_resposta_seg IS NOT NULL AND t.criado_em >= NOW() - ($1 || ' days')::INTERVAL)) as tpr_medio,
+      ROUND(AVG(t.tempo_resolucao_seg) FILTER (WHERE t.tempo_resolucao_seg IS NOT NULL AND t.criado_em >= NOW() - ($1 || ' days')::INTERVAL)) as tma_medio
     FROM usuarios u
-    LEFT JOIN tickets t ON t.usuario_id = u.id AND t.criado_em >= NOW() - ($1 || ' days')::INTERVAL
+    LEFT JOIN tickets t ON t.usuario_id = u.id
     WHERE u.ativo = TRUE AND u.perfil != 'admin'
-    GROUP BY u.id ORDER BY tickets_total DESC
+    GROUP BY u.id
   `, [dias]);
 
-  // Ciclos concluídos por atendente (mensagens de fechamento)
-  const resolucoes = await query(`
-    SELECT m.usuario_id, COUNT(*) as concluidos FROM mensagens m
+  // 2. Ciclos concluídos por atendente (mensagens de fechamento no período)
+  const concluidos = await query(`
+    SELECT m.usuario_id, COUNT(*) as total FROM mensagens m
     WHERE ${FILTRO_FECHAMENTO}
       AND m.criado_em >= NOW() - ($1 || ' days')::INTERVAL AND m.usuario_id IS NOT NULL
     GROUP BY m.usuario_id
   `, [dias]);
 
+  // 3. Ciclos em andamento por atendente (tickets ativos com criado_em no período)
+  const andamento = await query(`
+    SELECT usuario_id, COUNT(*) as total FROM tickets
+    WHERE status IN ('pendente', 'aberto', 'aguardando')
+      AND criado_em >= NOW() - ($1 || ' days')::INTERVAL AND usuario_id IS NOT NULL
+    GROUP BY usuario_id
+  `, [dias]);
+
   const conclMap = {};
-  for (const r of resolucoes.rows) conclMap[r.usuario_id] = parseInt(r.concluidos);
-  return resultado.rows.map(r => ({ ...r, concluidos: conclMap[r.id] || 0 }));
+  for (const r of concluidos.rows) conclMap[r.usuario_id] = parseInt(r.total);
+  const andMap = {};
+  for (const r of andamento.rows) andMap[r.usuario_id] = parseInt(r.total);
+
+  return base.rows.map(r => ({
+    id: r.id,
+    nome: r.nome,
+    avatar_url: r.avatar_url,
+    online: r.online,
+    chamados: (conclMap[r.id] || 0) + (andMap[r.id] || 0),
+    tpr_medio: parseInt(r.tpr_medio) || 0,
+    tma_medio: parseInt(r.tma_medio) || 0,
+    tickets_ativos: parseInt(r.tickets_ativos) || 0,
+  })).sort((a, b) => b.chamados - a.chamados);
 }
 
 // ── CSAT (mantido por compatibilidade) ──────────────────
