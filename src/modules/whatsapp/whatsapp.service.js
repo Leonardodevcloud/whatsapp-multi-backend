@@ -49,10 +49,27 @@ async function enviarMensagemTexto({ ticketId, texto, usuarioId, quotedMessageId
       const hora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Bahia' });
       await registrarMensagemSistema({ ticketId, corpo: `${nomeAtendente} iniciou o atendimento às ${hora}`, usuarioId });
       logger.info({ ticketId, usuarioId }, '[WA] Chamado auto-aceito');
+
+      // Invalidar cache e notificar sidebar
+      try {
+        const { invalidarCacheListagens } = require('../tickets/tickets.service');
+        await invalidarCacheListagens();
+        const { broadcast } = require('../../websocket');
+        broadcast('ticket:atualizado', { id: ticketId, status: 'aberto', usuario_id: usuarioId, acao: 'aceitar' });
+      } catch (_) {}
+
     } else if (ticketData?.usuario_id && ticketData.usuario_id !== usuarioId) {
       // Reatribuir ticket se outro usuário envia mensagem
       await query(`UPDATE tickets SET usuario_id = $1, atualizado_em = NOW() WHERE id = $2`, [usuarioId, ticketId]);
       logger.info({ ticketId, de: ticketData.usuario_id, para: usuarioId }, '[WA] Chamado reatribuído ao remetente');
+
+      // Invalidar cache e notificar sidebar
+      try {
+        const { invalidarCacheListagens } = require('../tickets/tickets.service');
+        await invalidarCacheListagens();
+        const { broadcast } = require('../../websocket');
+        broadcast('ticket:atualizado', { id: ticketId, usuario_id: usuarioId, acao: 'reatribuir' });
+      } catch (_) {}
     }
 
     // Buscar wa_message_id da mensagem citada pra enviar pro Z-API
@@ -92,6 +109,11 @@ async function enviarMensagemTexto({ ticketId, texto, usuarioId, quotedMessageId
       `UPDATE tickets SET ultima_mensagem_em = NOW(), ultima_mensagem_preview = $1, atualizado_em = NOW() WHERE id = $2`,
       [textoComPrefixo.substring(0, 200), ticketId]
     );
+
+    try {
+      const { invalidarCacheListagens } = require('../tickets/tickets.service');
+      await invalidarCacheListagens();
+    } catch (_) {}
 
     await _calcularTempoRespostaSeNecessario(ticketId);
     return msgResult.rows[0];
