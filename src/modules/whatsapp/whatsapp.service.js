@@ -128,8 +128,20 @@ async function _calcularTempoRespostaSeNecessario(ticketId) {
   try {
     const ticket = await query(`SELECT tempo_primeira_resposta_seg, criado_em FROM tickets WHERE id = $1`, [ticketId]);
     if (ticket.rows[0]?.tempo_primeira_resposta_seg !== null) return;
+
+    // Buscar timestamp da PRIMEIRA resposta do atendente (is_from_me=TRUE, não sistema)
+    const primeiraResp = await query(
+      `SELECT criado_em FROM mensagens 
+       WHERE ticket_id = $1 AND is_from_me = TRUE AND tipo != 'sistema'
+       ORDER BY criado_em ASC LIMIT 1`,
+      [ticketId]
+    );
+
+    // Se não encontrou resposta, é agora (mensagem sendo enviada neste momento)
+    const horaResposta = primeiraResp.rows[0]?.criado_em || new Date();
+
     const { calcularTempoComercial } = require('../../shared/businessTime');
-    const diffSeg = calcularTempoComercial(ticket.rows[0].criado_em, new Date());
+    const diffSeg = calcularTempoComercial(ticket.rows[0].criado_em, horaResposta);
     await query(`UPDATE tickets SET tempo_primeira_resposta_seg = $1 WHERE id = $2`, [diffSeg, ticketId]);
   } catch (err) {
     logger.error({ err, ticketId }, '[WA] Erro TPR');
