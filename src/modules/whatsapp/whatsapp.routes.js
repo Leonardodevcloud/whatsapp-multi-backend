@@ -957,7 +957,7 @@ router.post('/webhook', async (req, res) => {
       // Processar (pesado — LID, merge, avatar, etc)
       const resultado = await whatsappService.processarMensagemRecebida({
         telefone, nome, corpo, tipo, waMessageId: waMessageIdFinal,
-        isGroup, fromMe, mediaUrl, nomeParticipante, isLidRaw, chatLid: chatLidRaw,
+        isGroup, fromMe, mediaUrl, nomeParticipante, isLidRaw, chatLid: chatLidRaw, mediaNome: body.document?.fileName || null,
       });
 
       if (resultado) {

@@ -144,7 +144,7 @@ async function _calcularTempoRespostaSeNecessario(ticketId) {
 //   🔒 Nunca depender do phone para identificar o usuário
 //   🚫 Grupos NÃO interferem com contatos 1:1
 // ============================================================
-async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessageId, isGroup, fromMe, mediaUrl, nomeParticipante, isLidRaw, chatLid }) {
+async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessageId, isGroup, fromMe, mediaUrl, nomeParticipante, isLidRaw, chatLid, mediaNome }) {
   const client = await getClient();
 
   try {
@@ -435,10 +435,10 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
     }
 
     const msgResult = await client.query(
-      `INSERT INTO mensagens (ticket_id, contato_id, corpo, tipo, wa_message_id, is_from_me, status_envio, media_url, nome_participante)
-       VALUES ($1, $2, $3, $4, $5, $6, 'entregue', $7, $8)
-       RETURNING id, ticket_id, corpo, tipo, is_from_me, criado_em, media_url, nome_participante`,
-      [ticketId, fromMe ? null : contatoId, corpoFinal, tipo, waMessageId, fromMe || false, mediaUrl || null, (isGroup && nomeParticipante) ? nomeParticipante : null]
+      `INSERT INTO mensagens (ticket_id, contato_id, corpo, tipo, wa_message_id, is_from_me, status_envio, media_url, nome_participante, media_nome)
+       VALUES ($1, $2, $3, $4, $5, $6, 'entregue', $7, $8, $9)
+       RETURNING id, ticket_id, corpo, tipo, is_from_me, criado_em, media_url, nome_participante, media_nome`,
+      [ticketId, fromMe ? null : contatoId, corpoFinal, tipo, waMessageId, fromMe || false, mediaUrl || null, (isGroup && nomeParticipante) ? nomeParticipante : null, mediaNome || null]
     );
 
     await client.query(
