@@ -15,6 +15,8 @@ router.post('/login', limiteLogin, async (req, res, next) => {
     const usuario = await authService.login({ email, senha, ip: req.ip });
     const { accessToken, refreshToken } = gerarTokens(usuario);
 
+    // Limpar cookies antigos antes de setar novos (evita duplicatas no browser)
+    limparCookiesAuth(res);
     setarCookiesAuth(res, accessToken, refreshToken);
 
     res.json({
@@ -39,6 +41,7 @@ router.post('/refresh', async (req, res, next) => {
     const usuario = await authService.refreshToken(token);
     const { accessToken, refreshToken } = gerarTokens(usuario);
 
+    limparCookiesAuth(res);
     setarCookiesAuth(res, accessToken, refreshToken);
 
     res.json({ sucesso: true, usuario });

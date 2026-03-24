@@ -83,35 +83,41 @@ function gerarTokens(usuario) {
   return { accessToken, refreshToken };
 }
 
+// Opções base dos cookies (reutilizadas em set e clear)
+function _cookieOpts() {
+  const isProduction = env.NODE_ENV === 'production';
+  return {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: 'lax',
+    path: '/',
+  };
+}
+
 /**
  * Setar cookies httpOnly com os tokens
  */
 function setarCookiesAuth(res, accessToken, refreshToken) {
-  const isProduction = env.NODE_ENV === 'production';
+  const opts = _cookieOpts();
 
   res.cookie('access_token', accessToken, {
-    httpOnly: true,
-    secure: isProduction,
-    sameSite: 'lax',
+    ...opts,
     maxAge: 15 * 60 * 1000, // 15 minutos
-    path: '/',
   });
 
   res.cookie('refresh_token', refreshToken, {
-    httpOnly: true,
-    secure: isProduction,
-    sameSite: 'lax',
+    ...opts,
     maxAge: 7 * 24 * 60 * 60 * 1000, // 7 dias
-    path: '/',
   });
 }
 
 /**
- * Limpar cookies de auth
+ * Limpar cookies de auth — DEVE usar mesmas opções do set
  */
 function limparCookiesAuth(res) {
-  res.clearCookie('access_token', { path: '/' });
-  res.clearCookie('refresh_token', { path: '/' });
+  const opts = _cookieOpts();
+  res.clearCookie('access_token', opts);
+  res.clearCookie('refresh_token', opts);
 }
 
 module.exports = {
