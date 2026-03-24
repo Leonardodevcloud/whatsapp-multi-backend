@@ -23,11 +23,11 @@ async function listarContatos({ cursor, limite = 100, busca, tipo, offset = 0 })
     idx++;
   }
 
-  // Filtrar por tipo: grupos têm telefone com 15+ dígitos
+  // Filtrar por tipo usando a coluna is_group (setada pelo webhook)
   if (tipo === 'grupo') {
-    condicoes.push(`LENGTH(c.telefone) > 15`);
+    condicoes.push(`c.is_group = TRUE`);
   } else if (tipo === 'contato') {
-    condicoes.push(`LENGTH(c.telefone) <= 15`);
+    condicoes.push(`(c.is_group = FALSE OR c.is_group IS NULL)`);
   }
 
   const where = condicoes.length > 0 ? `WHERE ${condicoes.join(' AND ')}` : '';

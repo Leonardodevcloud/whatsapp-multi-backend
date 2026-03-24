@@ -165,8 +165,9 @@ async function iniciar() {
 
     // 4b. Garantir coluna is_group em contatos
     await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS is_group BOOLEAN DEFAULT FALSE`).catch(() => {});
-    // Marcar grupos existentes pelo padrão do telefone
-    await pool.query(`UPDATE contatos SET is_group = TRUE WHERE is_group IS NOT TRUE AND telefone LIKE '120363%'`).catch(() => {});
+    await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS nome_editado BOOLEAN DEFAULT FALSE`).catch(() => {});
+    // Marcar grupos existentes por múltiplos padrões
+    await pool.query(`UPDATE contatos SET is_group = TRUE WHERE is_group IS NOT TRUE AND (telefone LIKE '120363%' OR telefone LIKE '%-group' OR LENGTH(telefone) > 18)`).catch(() => {});
 
     // 5. Inicializar WebSocket
     inicializarWebSocket(server);
