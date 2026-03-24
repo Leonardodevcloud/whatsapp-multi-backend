@@ -351,28 +351,46 @@ async function picosHorario({ dataInicio, dataFim, usuarioId } = {}) {
   const params = [dataInicio, dataFim];
   if (usuarioId) params.push(usuarioId);
 
-  const aberturas = await query(`
-    SELECT EXTRACT(HOUR FROM criado_em AT TIME ZONE 'America/Bahia')::int as hora, COUNT(*) as total
-    FROM tickets WHERE criado_em >= $1::DATE AND criado_em < ($2::DATE + INTERVAL '1 day') AND ${_hc('criado_em')} ${uCond}
+  // Ciclos concluídos: usar aberto_em (hora que o ciclo iniciou — dado fixo, não muda com reopen)
+  const ciclosAbertos = await query(`
+    SELECT EXTRACT(HOUR FROM aberto_em AT TIME ZONE 'America/Bahia')::int as hora, COUNT(*) as total
+    FROM ticket_ciclos
+    WHERE aberto_em >= $1::DATE AND aberto_em < ($2::DATE + INTERVAL '1 day') AND ${_hc('aberto_em')} ${uCond}
     GROUP BY 1
   `, params);
 
-  const ciclos = await query(`
+  // Tickets ainda ativos (ciclo atual em andamento)
+  const ativos = await query(`
+    SELECT EXTRACT(HOUR FROM criado_em AT TIME ZONE 'America/Bahia')::int as hora, COUNT(*) as total
+    FROM tickets
+    WHERE status IN ('pendente','aberto','aguardando')
+      AND criado_em >= $1::DATE AND criado_em < ($2::DATE + INTERVAL '1 day') AND ${_hc('criado_em')} ${uCond}
+    GROUP BY 1
+  `, params);
+
+  // Métricas extras (TPR, atendentes) por hora de fechamento
+  const ciclosMeta = await query(`
     SELECT EXTRACT(HOUR FROM fechado_em AT TIME ZONE 'America/Bahia')::int as hora,
-      COUNT(*) as concluidos,
       ROUND(AVG(tempo_primeira_resposta_seg) FILTER (WHERE tempo_primeira_resposta_seg IS NOT NULL)) as tpr_medio,
       COUNT(DISTINCT usuario_id) as atendentes
     FROM ticket_ciclos WHERE fechado_em >= $1::DATE AND fechado_em < ($2::DATE + INTERVAL '1 day') AND ${_hc('fechado_em')} ${uCond}
     GROUP BY 1
   `, params);
 
-  const abMap = {}; for (const r of aberturas.rows) abMap[parseInt(r.hora)] = parseInt(r.total);
-  const cMap = {}; for (const r of ciclos.rows) cMap[parseInt(r.hora)] = r;
+  const cMap = {}; for (const r of ciclosAbertos.rows) cMap[parseInt(r.hora)] = parseInt(r.total);
+  const aMap = {}; for (const r of ativos.rows) aMap[parseInt(r.hora)] = parseInt(r.total);
+  const mMap = {}; for (const r of ciclosMeta.rows) mMap[parseInt(r.hora)] = r;
 
   const horas = [];
   for (let h = 8; h <= 18; h++) {
-    const c = cMap[h];
-    horas.push({ hora: h, label: `${String(h).padStart(2, '0')}:00`, chamados: abMap[h] || 0, concluidos: c ? parseInt(c.concluidos) : 0, tpr_medio: c ? parseInt(c.tpr_medio) || 0 : 0, atendentes: c ? parseInt(c.atendentes) : 0 });
+    const m = mMap[h];
+    horas.push({
+      hora: h, label: `${String(h).padStart(2, '0')}:00`,
+      chamados: (cMap[h] || 0) + (aMap[h] || 0),
+      concluidos: cMap[h] || 0,
+      tpr_medio: m ? parseInt(m.tpr_medio) || 0 : 0,
+      atendentes: m ? parseInt(m.atendentes) : 0,
+    });
   }
   return horas;
 }
