@@ -210,7 +210,7 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
     // 1️⃣ BUSCAR POR chatLid (chave principal)
     if (chatLid && !isGroup) {
       const r = await client.query(
-        `SELECT id, nome, telefone, avatar_url, lid FROM contatos WHERE lid = $1`,
+        `SELECT id, nome, telefone, avatar_url, lid, nome_editado FROM contatos WHERE lid = $1`,
         [chatLid]
       );
       if (r.rows.length > 0) {
@@ -222,7 +222,7 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
     // 2️⃣ Se não achou por chatLid, buscar por telefone exato (pode ser real)
     if (!contatoExistente && isPhoneReal) {
       const r = await client.query(
-        `SELECT id, nome, telefone, avatar_url, lid FROM contatos WHERE telefone = $1`,
+        `SELECT id, nome, telefone, avatar_url, lid, nome_editado FROM contatos WHERE telefone = $1`,
         [telefoneLimpo]
       );
       if (r.rows.length > 0) {
@@ -270,7 +270,7 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
     // 3️⃣ Se é LID no phone e não achou por chatLid, buscar pelo telefone=LID
     if (!contatoExistente && isPhoneLid) {
       const r = await client.query(
-        `SELECT id, nome, telefone, avatar_url, lid FROM contatos WHERE telefone = $1 OR lid = $1`,
+        `SELECT id, nome, telefone, avatar_url, lid, nome_editado FROM contatos WHERE telefone = $1 OR lid = $1`,
         [telefoneLimpo]
       );
       if (r.rows.length > 0) {
@@ -282,7 +282,7 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
     // 4️⃣ fromMe com LID: buscar por nome pra mapear chatLid
     if (!contatoExistente && isPhoneLid && fromMe && nome && !/^\d+$/.test(nome)) {
       const r = await client.query(
-        `SELECT id, nome, telefone, avatar_url, lid FROM contatos
+        `SELECT id, nome, telefone, avatar_url, lid, nome_editado FROM contatos
          WHERE LOWER(nome) = LOWER($1) AND lid IS NULL
          ORDER BY id DESC LIMIT 1`,
         [nome]
@@ -340,8 +340,8 @@ async function processarMensagemRecebida({ telefone, nome, corpo, tipo, waMessag
         }
       }
 
-      // --- ATUALIZAR nome (só se veio nome real, não número) ---
-      if (nome && !/^\d+$/.test(nome) && nome !== contatoExistente.nome) {
+      // --- ATUALIZAR nome (só se veio nome real, não número, e não foi editado manualmente) ---
+      if (nome && !/^\d+$/.test(nome) && nome !== contatoExistente.nome && !contatoExistente.nome_editado) {
         await client.query(`UPDATE contatos SET nome = $1, atualizado_em = NOW() WHERE id = $2`, [nome, contatoId]);
       }
 

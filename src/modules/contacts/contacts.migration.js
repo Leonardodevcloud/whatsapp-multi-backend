@@ -19,6 +19,8 @@ const SQL = `
 async function initContactsTables(pool) {
   try {
     await pool.query(SQL);
+    // Flag que impede o webhook de sobrescrever o nome editado manualmente
+    await pool.query(`ALTER TABLE contatos ADD COLUMN IF NOT EXISTS nome_editado BOOLEAN DEFAULT FALSE`);
     logger.info('[Migration] Tabela contatos criada/verificada');
   } catch (err) {
     logger.error({ err }, '[Migration] Falha ao criar tabela contatos');

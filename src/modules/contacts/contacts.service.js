@@ -205,6 +205,11 @@ async function atualizarContato({ contatoId, dados, usuarioId, ip }) {
     }
   }
 
+  // Se o nome foi editado manualmente, marcar flag pra impedir webhook de sobrescrever
+  if (dados.nome !== undefined) {
+    updates.push(`nome_editado = TRUE`);
+  }
+
   if (updates.length === 0) {
     throw new AppError('Nenhum campo válido para atualizar', 400);
   }
