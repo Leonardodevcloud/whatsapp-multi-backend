@@ -77,6 +77,34 @@ router.get('/atendente/:id', verificarToken, verificarAdminOuSupervisor, async (
   } catch (err) { next(err); }
 });
 
+router.get('/contatos-unicos', verificarToken, async (req, res, next) => {
+  try {
+    const { dias } = req.query;
+    res.json(await reportsService.contatosUnicos({ dias: parseInt(dias) || 30 }));
+  } catch (err) { next(err); }
+});
+
+router.get('/tempos-dia', verificarToken, async (req, res, next) => {
+  try {
+    const { dias } = req.query;
+    res.json(await reportsService.temposPorDia({ dias: parseInt(dias) || 30 }));
+  } catch (err) { next(err); }
+});
+
+router.get('/mensagens-dia', verificarToken, async (req, res, next) => {
+  try {
+    const { dias } = req.query;
+    res.json(await reportsService.mensagensPorDia({ dias: parseInt(dias) || 30 }));
+  } catch (err) { next(err); }
+});
+
+router.get('/picos-horario', verificarToken, async (req, res, next) => {
+  try {
+    const { dias } = req.query;
+    res.json(await reportsService.picosHorario({ dias: parseInt(dias) || 30 }));
+  } catch (err) { next(err); }
+});
+
 // AI Insights — análise inteligente
 router.get('/insights', verificarToken, verificarAdminOuSupervisor, async (req, res) => {
   try {
