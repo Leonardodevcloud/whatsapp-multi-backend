@@ -39,8 +39,7 @@ async function obterDashboard({ dataInicio, dataFim, usuarioId } = {}) {
   `, params);
 
   const andamento = await query(`
-    SELECT COUNT(*) as total,
-      ROUND(AVG(tempo_primeira_resposta_seg) FILTER (WHERE tempo_primeira_resposta_seg IS NOT NULL)) as tpr_medio
+    SELECT COUNT(*) as total
     FROM tickets
     WHERE status IN ('pendente','aberto','aguardando')
       AND criado_em >= $1::DATE AND criado_em < ($2::DATE + INTERVAL '1 day')
@@ -57,15 +56,15 @@ async function obterDashboard({ dataInicio, dataFim, usuarioId } = {}) {
 
   const ct = parseInt(ciclos.rows[0].total) || 0;
   const at = parseInt(andamento.rows[0].total) || 0;
-  const tprC = parseInt(ciclos.rows[0].tpr_medio) || 0;
-  const tprA = parseInt(andamento.rows[0].tpr_medio) || 0;
-  let tpr = tprC;
-  if (tprC && tprA) tpr = Math.round((tprC * ct + tprA * at) / (ct + at));
-  else if (tprA && !tprC) tpr = tprA;
+
+  // TPR e TMA somente de ciclos concluídos (ticket_ciclos)
+  // Tickets em andamento só contam pro número de chamados
+  const tpr = parseInt(ciclos.rows[0].tpr_medio) || 0;
+  const tma = parseInt(ciclos.rows[0].tma_medio) || 0;
 
   return {
     chamados: ct + at, tpr_medio: tpr,
-    tma_medio: parseInt(ciclos.rows[0].tma_medio) || 0,
+    tma_medio: tma,
     pendentes: parseInt(pendentes.rows[0].total) || 0,
     em_atendimento: parseInt(emAtendimento.rows[0].total) || 0,
     atendentes_online: parseInt(online.rows[0].total) || 0,
