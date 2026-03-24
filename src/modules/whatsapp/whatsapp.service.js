@@ -77,6 +77,7 @@ async function enviarMensagemTexto({ ticketId, texto, usuarioId, quotedMessageId
     if (quotedMessageId) {
       const qResult = await query(`SELECT wa_message_id FROM mensagens WHERE id = $1`, [quotedMessageId]);
       waQuotedId = qResult.rows[0]?.wa_message_id || null;
+      logger.info({ quotedMessageId, waQuotedId, ehGrupo }, '[WA] Quote: DB id → wa_message_id');
     }
 
     // Prefixo com nome do atendente

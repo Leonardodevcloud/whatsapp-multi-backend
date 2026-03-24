@@ -68,23 +68,25 @@ class WhatsAppConnection extends EventEmitter {
     this._verificarConectado();
     const payload = { phone: telefone, message: texto };
 
-    // Quote/Reply — Z-API aceita messageId pra citar
+    // Quote/Reply — Z-API aceita messageId ou quotedMessageId dependendo da versão
     if (opts.quotedMessageId) {
       payload.messageId = opts.quotedMessageId;
+      payload.quotedMessageId = opts.quotedMessageId;
     }
 
     // Menções em grupo
     if (opts.mentioned && opts.mentioned.length > 0) {
       if (opts.mentioned.includes('all')) {
-        // @todos — Z-API usa mentionsEveryOne
         payload.mentionsEveryOne = true;
       } else {
-        // Menções individuais
         payload.mentioned = opts.mentioned;
       }
     }
 
-    logger.info({ telefone, textoLen: texto.length, quote: !!opts.quotedMessageId, mentions: opts.mentioned?.length || 0 }, '[WhatsApp] Enviando texto');
+    logger.info({ telefone, textoLen: texto.length, quote: opts.quotedMessageId || null, mentions: opts.mentioned?.length || 0 }, '[WhatsApp] Enviando texto');
+
+    const payloadJson = JSON.stringify(payload);
+    logger.info({ payloadKeys: Object.keys(payload), phone: payload.phone, hasQuote: !!payload.quotedMessageId }, '[WhatsApp] Payload Z-API');
 
     const response = await fetch(`${this.baseUrl}/send-text`, {
       method: 'POST',
