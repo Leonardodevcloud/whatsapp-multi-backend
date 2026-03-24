@@ -12,7 +12,7 @@ const { cacheGet, cacheSet, cacheDel } = require('../../config/redis');
 
 // Prefixo de cache para listagens de tickets
 const CACHE_PREFIX = 'tickets:list:';
-const CACHE_TTL = 8; // 8 segundos — curto o suficiente pra ser "fresco", longo pra evitar 15 users batendo o mesmo
+const CACHE_TTL = 30; // 30 segundos — WS invalida em mudanças, polling é fallback a cada 60s
 
 /**
  * Invalidar cache de todas as listagens de tickets
