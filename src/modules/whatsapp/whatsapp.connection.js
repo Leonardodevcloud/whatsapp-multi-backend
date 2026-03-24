@@ -244,6 +244,23 @@ class WhatsAppConnection extends EventEmitter {
     return { key: { id: data.zapiMessageId || data.messageId || 'sent' } };
   }
 
+  async enviarContato(telefone, contactName, contactPhone) {
+    this._verificarConectado();
+    const resp = await fetch(`${this.baseUrl}/send-contact-vcard`, {
+      method: 'POST',
+      headers: this.headers,
+      body: JSON.stringify({
+        phone: telefone,
+        contactName: contactName,
+        contactPhone: contactPhone,
+        contactBusinessDescription: '',
+      }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.message || `HTTP ${resp.status}`);
+    return { key: { id: data.zapiMessageId || data.messageId || 'sent' } };
+  }
+
   _verificarConectado() {
     if (this.status !== 'conectado') {
       if (this.instanceId && this.token) { this.status = 'conectado'; return; }

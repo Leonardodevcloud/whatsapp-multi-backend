@@ -893,10 +893,9 @@ async function _obterDestinoDoTicket(ticketId) {
 
   const { telefone, lid } = resultado.rows[0];
 
-  // Pra GRUPOS: usar telefone raw (ID do grupo), NUNCA lid
-  // Grupos têm telefone com 15+ dígitos (ex: 120363421560154850)
-  const isGroupPhone = telefone && telefone.length > 15;
-  if (isGroupPhone) return telefone;
+  // Pra GRUPOS: usar telefone com sufixo -group (padrão Z-API)
+  const ehGrupo = telefone && (telefone.startsWith('120363') || telefone.includes('-'));
+  if (ehGrupo) return telefone.includes('-group') ? telefone : `${telefone}-group`;
 
   // Pra 1:1: priorizar lid (mais estável segundo Z-API)
   return lid ? `${lid}@lid` : telefone;
@@ -1052,6 +1051,12 @@ async function encaminharMensagem(mensagemId, telefoneDestino) {
   const prefixo = `📨 *Encaminhada de ${contato_nome || 'contato'}:*\n\n`;
   if (tipo === 'imagem' && media_url) {
     await conexaoWA.enviarImagem(telDestino, media_url, prefixo + (corpo || ''));
+  } else if (tipo === 'audio' && media_url) {
+    await conexaoWA.enviarAudio(telDestino, media_url);
+  } else if (tipo === 'video' && media_url) {
+    await conexaoWA.enviarVideo(telDestino, media_url, prefixo + (corpo || ''));
+  } else if (tipo === 'documento' && media_url) {
+    await conexaoWA.enviarDocumento(telDestino, media_url, corpo || 'documento');
   } else {
     await conexaoWA.enviarTexto(telDestino, prefixo + (corpo || ''));
   }

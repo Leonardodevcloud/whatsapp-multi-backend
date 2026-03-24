@@ -45,7 +45,9 @@ async function listarContatos({ cursor, limite = 100, busca, tipo, offset = 0 })
 
   const resultado = await query(
     `SELECT c.id, c.nome, c.telefone, c.avatar_url, c.email, c.criado_em,
-            (SELECT COUNT(*) FROM tickets t WHERE t.contato_id = c.id) as total_tickets,
+            (SELECT COUNT(*) FROM ticket_ciclos tc WHERE tc.contato_id = c.id)
+            + (SELECT COUNT(*) FROM tickets t WHERE t.contato_id = c.id AND t.status IN ('pendente','aberto','aguardando'))
+            as total_chamados,
             (SELECT t.ultima_mensagem_em FROM tickets t WHERE t.contato_id = c.id ORDER BY t.criado_em DESC LIMIT 1) as ultimo_contato,
             (SELECT t.status FROM tickets t WHERE t.contato_id = c.id ORDER BY t.criado_em DESC LIMIT 1) as ultimo_status,
             COALESCE(
@@ -55,7 +57,7 @@ async function listarContatos({ cursor, limite = 100, busca, tipo, offset = 0 })
             ) as tags
      FROM contatos c
      ${where}
-     ORDER BY (SELECT COUNT(*) FROM tickets t WHERE t.contato_id = c.id) DESC, c.nome ASC
+     ORDER BY (SELECT COUNT(*) FROM ticket_ciclos tc WHERE tc.contato_id = c.id) DESC, c.nome ASC
      LIMIT $${idx} OFFSET $${idx + 1}`,
     params
   );
