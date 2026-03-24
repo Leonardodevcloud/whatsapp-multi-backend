@@ -110,16 +110,19 @@ async function _executarQueryListagem({ cursor, limite = 50, status, filaId, usu
   params.push(limiteVal);
 
   // Definir ORDER BY baseado no parâmetro `ordem`
+  // SEMPRE prioriza chamados com prioridade alta ou tag urgente no topo
+  const urgentePrimeiro = `CASE WHEN t.prioridade = 'alta' OR t.prioridade = 'urgente' OR EXISTS (SELECT 1 FROM ticket_tags tt JOIN tags tg ON tg.id = tt.tag_id WHERE tt.ticket_id = t.id AND LOWER(tg.nome) = 'urgente') THEN 0 ELSE 1 END`;
+
   let orderBy;
   switch (ordem) {
     case 'antigo':
-      orderBy = 't.criado_em ASC, t.id ASC';
+      orderBy = `${urgentePrimeiro}, t.criado_em ASC, t.id ASC`;
       break;
     case 'atividade':
-      orderBy = 'COALESCE(t.ultima_mensagem_em, t.criado_em) DESC, t.id DESC';
+      orderBy = `${urgentePrimeiro}, COALESCE(t.ultima_mensagem_em, t.criado_em) DESC, t.id DESC`;
       break;
     default:
-      orderBy = 't.id DESC';
+      orderBy = `${urgentePrimeiro}, t.id DESC`;
   }
 
   // Usar LEFT JOIN com aggregation em vez de subquery correlata pra nao_lidas
@@ -131,7 +134,12 @@ async function _executarQueryListagem({ cursor, limite = 50, status, filaId, usu
             c.nome as contato_nome, c.telefone as contato_telefone, c.avatar_url as contato_avatar,
             f.nome as fila_nome, f.cor as fila_cor,
             u.nome as atendente_nome, u.avatar_url as atendente_avatar,
-            COALESCE(nl.total, 0)::int as nao_lidas
+            COALESCE(nl.total, 0)::int as nao_lidas,
+            COALESCE(
+              (SELECT json_agg(json_build_object('id', tg.id, 'nome', tg.nome, 'cor', tg.cor))
+               FROM ticket_tags tt JOIN tags tg ON tg.id = tt.tag_id
+               WHERE tt.ticket_id = t.id), '[]'
+            ) as tags
      FROM tickets t
      LEFT JOIN contatos c ON c.id = t.contato_id
      LEFT JOIN filas f ON f.id = t.fila_id
