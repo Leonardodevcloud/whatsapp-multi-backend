@@ -5,13 +5,11 @@ const { verificarToken, verificarAdminOuSupervisor } = require('../../middleware
 
 const router = Router();
 
-// Helper: extrai dataInicio/dataFim (aceita dias OU datas explícitas)
 function _p(query) {
   let { dataInicio, dataFim, dias } = query;
   if (dataInicio && dataFim) return { dataInicio, dataFim };
   const d = parseInt(dias) || 30;
-  const fim = new Date();
-  const inicio = new Date();
+  const fim = new Date(); const inicio = new Date();
   inicio.setDate(inicio.getDate() - d);
   return { dataInicio: inicio.toISOString().split('T')[0], dataFim: fim.toISOString().split('T')[0] };
 }
@@ -19,59 +17,47 @@ function _p(query) {
 router.get('/dashboard', verificarToken, async (req, res, next) => {
   try { res.json(await reportsService.obterDashboard(_p(req.query))); } catch (err) { next(err); }
 });
-
 router.get('/tickets-hora', verificarToken, async (req, res, next) => {
   try { res.json(await reportsService.ticketsPorHora()); } catch (err) { next(err); }
 });
-
 router.get('/tickets-dia', verificarToken, async (req, res, next) => {
   try { res.json(await reportsService.ticketsPorDia(_p(req.query))); } catch (err) { next(err); }
 });
-
 router.get('/tickets-fila', verificarToken, async (req, res, next) => {
   try { res.json(await reportsService.ticketsPorFila()); } catch (err) { next(err); }
 });
-
 router.get('/performance', verificarToken, verificarAdminOuSupervisor, async (req, res, next) => {
   try { res.json(await reportsService.performanceAtendentes(_p(req.query))); } catch (err) { next(err); }
 });
-
 router.get('/csat', verificarToken, async (req, res, next) => {
   try { res.json(await reportsService.csatDistribuicao({ dias: parseInt(req.query.dias) || 30 })); } catch (err) { next(err); }
 });
-
 router.get('/tempos-resposta', verificarToken, async (req, res, next) => {
   try { res.json(await reportsService.temposResposta(_p(req.query))); } catch (err) { next(err); }
 });
-
 router.get('/picos', verificarToken, verificarAdminOuSupervisor, async (req, res, next) => {
   try { res.json(await reportsService.picosAtendimento(_p(req.query))); } catch (err) { next(err); }
 });
-
 router.get('/heatmap', verificarToken, async (req, res, next) => {
   try { res.json(await reportsService.volumePorHoraDia({ dias: parseInt(req.query.dias) || 30 })); } catch (err) { next(err); }
 });
-
 router.get('/atendente/:id', verificarToken, verificarAdminOuSupervisor, async (req, res, next) => {
   try { res.json(await reportsService.detalheAtendente(req.params.id, { dias: parseInt(req.query.dias) || 30 })); } catch (err) { next(err); }
 });
-
 router.get('/contatos-unicos', verificarToken, async (req, res, next) => {
   try { res.json(await reportsService.contatosUnicos(_p(req.query))); } catch (err) { next(err); }
 });
-
-router.get('/tempos-dia', verificarToken, async (req, res, next) => {
-  try { res.json(await reportsService.temposPorDia(_p(req.query))); } catch (err) { next(err); }
+router.get('/tempos-hora', verificarToken, async (req, res, next) => {
+  try { res.json(await reportsService.temposPorHora(_p(req.query))); } catch (err) { next(err); }
 });
-
 router.get('/mensagens-dia', verificarToken, async (req, res, next) => {
   try { res.json(await reportsService.mensagensPorDia(_p(req.query))); } catch (err) { next(err); }
 });
-
 router.get('/picos-horario', verificarToken, async (req, res, next) => {
   try { res.json(await reportsService.picosHorario(_p(req.query))); } catch (err) { next(err); }
 });
 
+// AI Insights
 router.get('/insights', verificarToken, verificarAdminOuSupervisor, async (req, res) => {
   try {
     const apiKey = process.env.GEMINI_API_KEY;

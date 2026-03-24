@@ -1,14 +1,26 @@
 // src/modules/reports/reports.service.js
-// Todas as funções aceitam { dataInicio, dataFim } como filtro de período
+// TODAS as queries filtram por horário comercial:
+// Seg-Sex 08:00-18:59 (antes das 19h), Sáb 08:00-11:59 (antes das 12h), Dom = ignorado
 
 const { query } = require('../../config/database');
 
-async function _getHorarioOperacao() {
-  try {
-    const r = await query(`SELECT MIN(hora_abertura) as abertura, MAX(hora_fechamento) as fechamento FROM configuracao_horario WHERE ativo = TRUE`);
-    return { abertura: parseInt(r.rows[0]?.abertura) || 8, fechamento: parseInt(r.rows[0]?.fechamento) || 19 };
-  } catch { return { abertura: 8, fechamento: 19 }; }
+// ── Filtro de horário comercial ─────────────────────────
+// Recebe o nome da coluna timestamptz e retorna a condição SQL
+function _horarioComercial(col) {
+  return `(
+    (EXTRACT(DOW FROM ${col} AT TIME ZONE 'America/Bahia') BETWEEN 1 AND 5
+     AND EXTRACT(HOUR FROM ${col} AT TIME ZONE 'America/Bahia') BETWEEN 8 AND 18)
+    OR
+    (EXTRACT(DOW FROM ${col} AT TIME ZONE 'America/Bahia') = 6
+     AND EXTRACT(HOUR FROM ${col} AT TIME ZONE 'America/Bahia') BETWEEN 8 AND 11)
+  )`;
 }
+
+const HC_CICLOS = _horarioComercial('fechado_em');
+const HC_TICKETS = _horarioComercial('criado_em');
+const HC_MSGS = _horarioComercial('criado_em');
+const HC_TICKETS_T = _horarioComercial('t.criado_em');
+const HC_CICLOS_TC = _horarioComercial('tc.fechado_em');
 
 // ── Dashboard ────────────────────────────────────────────
 
@@ -19,6 +31,7 @@ async function obterDashboard({ dataInicio, dataFim } = {}) {
       ROUND(AVG(tempo_resolucao_seg) FILTER (WHERE tempo_resolucao_seg IS NOT NULL)) as tma_medio
     FROM ticket_ciclos
     WHERE fechado_em >= $1::DATE AND fechado_em < ($2::DATE + INTERVAL '1 day')
+      AND ${HC_CICLOS}
   `, [dataInicio, dataFim]);
 
   const andamento = await query(`
@@ -27,6 +40,7 @@ async function obterDashboard({ dataInicio, dataFim } = {}) {
     FROM tickets
     WHERE status IN ('pendente', 'aberto', 'aguardando')
       AND criado_em >= $1::DATE AND criado_em < ($2::DATE + INTERVAL '1 day')
+      AND ${HC_TICKETS}
   `, [dataInicio, dataFim]);
 
   const pendentes = await query(`SELECT COUNT(*) as total FROM tickets WHERE status = 'pendente'`);
@@ -54,13 +68,11 @@ async function obterDashboard({ dataInicio, dataFim } = {}) {
 // ── Tickets por hora (últimas 24h) ──────────────────────
 
 async function ticketsPorHora() {
-  const h = await _getHorarioOperacao();
   const resultado = await query(`
     SELECT date_trunc('hour', fechado_em AT TIME ZONE 'America/Bahia') as hora, COUNT(*) as total
-    FROM ticket_ciclos WHERE fechado_em >= NOW() - INTERVAL '24 hours'
-      AND EXTRACT(HOUR FROM fechado_em AT TIME ZONE 'America/Bahia') BETWEEN $1 AND $2
+    FROM ticket_ciclos WHERE fechado_em >= NOW() - INTERVAL '24 hours' AND ${HC_CICLOS}
     GROUP BY 1 ORDER BY 1
-  `, [h.abertura, h.fechamento]);
+  `);
   return resultado.rows;
 }
 
@@ -71,7 +83,7 @@ async function ticketsPorDia({ dataInicio, dataFim } = {}) {
     SELECT DATE(fechado_em AT TIME ZONE 'America/Bahia') as dia, COUNT(*) as total,
       ROUND(AVG(tempo_primeira_resposta_seg) FILTER (WHERE tempo_primeira_resposta_seg IS NOT NULL)) as tpr_medio
     FROM ticket_ciclos
-    WHERE fechado_em >= $1::DATE AND fechado_em < ($2::DATE + INTERVAL '1 day')
+    WHERE fechado_em >= $1::DATE AND fechado_em < ($2::DATE + INTERVAL '1 day') AND ${HC_CICLOS}
     GROUP BY 1 ORDER BY 1
   `, [dataInicio, dataFim]);
   return resultado.rows;
@@ -82,8 +94,8 @@ async function ticketsPorDia({ dataInicio, dataFim } = {}) {
 async function ticketsPorFila() {
   const resultado = await query(`
     SELECT f.nome, f.cor,
-      (SELECT COUNT(*) FROM ticket_ciclos tc WHERE tc.fila_id = f.id AND tc.fechado_em >= NOW() - INTERVAL '30 days')
-      + (SELECT COUNT(*) FROM tickets t WHERE t.fila_id = f.id AND t.status IN ('pendente','aberto','aguardando') AND t.criado_em >= NOW() - INTERVAL '30 days') as total,
+      (SELECT COUNT(*) FROM ticket_ciclos tc WHERE tc.fila_id = f.id AND tc.fechado_em >= NOW() - INTERVAL '30 days' AND ${HC_CICLOS_TC})
+      + (SELECT COUNT(*) FROM tickets t WHERE t.fila_id = f.id AND t.status IN ('pendente','aberto','aguardando') AND t.criado_em >= NOW() - INTERVAL '30 days' AND ${HC_TICKETS_T}) as total,
       (SELECT COUNT(*) FROM tickets t WHERE t.fila_id = f.id AND t.status = 'pendente') as pendentes,
       (SELECT COUNT(*) FROM tickets t WHERE t.fila_id = f.id AND t.status = 'aberto') as abertos
     FROM filas f WHERE f.ativo = TRUE ORDER BY total DESC
@@ -106,14 +118,16 @@ async function performanceAtendentes({ dataInicio, dataFim } = {}) {
       ROUND(AVG(tempo_primeira_resposta_seg) FILTER (WHERE tempo_primeira_resposta_seg IS NOT NULL)) as tpr_medio,
       ROUND(AVG(tempo_resolucao_seg) FILTER (WHERE tempo_resolucao_seg IS NOT NULL)) as tma_medio
     FROM ticket_ciclos
-    WHERE fechado_em >= $1::DATE AND fechado_em < ($2::DATE + INTERVAL '1 day') AND usuario_id IS NOT NULL
+    WHERE fechado_em >= $1::DATE AND fechado_em < ($2::DATE + INTERVAL '1 day')
+      AND ${HC_CICLOS} AND usuario_id IS NOT NULL
     GROUP BY usuario_id
   `, [dataInicio, dataFim]);
 
   const andamento = await query(`
     SELECT usuario_id, COUNT(*) as total FROM tickets
     WHERE status IN ('pendente','aberto','aguardando')
-      AND criado_em >= $1::DATE AND criado_em < ($2::DATE + INTERVAL '1 day') AND usuario_id IS NOT NULL
+      AND criado_em >= $1::DATE AND criado_em < ($2::DATE + INTERVAL '1 day')
+      AND ${HC_TICKETS} AND usuario_id IS NOT NULL
     GROUP BY usuario_id
   `, [dataInicio, dataFim]);
 
@@ -153,7 +167,7 @@ async function temposResposta({ dataInicio, dataFim } = {}) {
     END as faixa, COUNT(*) as total
     FROM ticket_ciclos
     WHERE tempo_primeira_resposta_seg IS NOT NULL
-      AND fechado_em >= $1::DATE AND fechado_em < ($2::DATE + INTERVAL '1 day')
+      AND fechado_em >= $1::DATE AND fechado_em < ($2::DATE + INTERVAL '1 day') AND ${HC_CICLOS}
     GROUP BY faixa ORDER BY MIN(tempo_primeira_resposta_seg)
   `, [dataInicio, dataFim]);
 
@@ -168,7 +182,7 @@ async function temposResposta({ dataInicio, dataFim } = {}) {
     END as faixa, COUNT(*) as total
     FROM tickets
     WHERE tempo_primeira_resposta_seg IS NOT NULL AND status IN ('aberto','aguardando')
-      AND criado_em >= $1::DATE AND criado_em < ($2::DATE + INTERVAL '1 day')
+      AND criado_em >= $1::DATE AND criado_em < ($2::DATE + INTERVAL '1 day') AND ${HC_TICKETS}
     GROUP BY faixa ORDER BY MIN(tempo_primeira_resposta_seg)
   `, [dataInicio, dataFim]);
 
@@ -179,19 +193,18 @@ async function temposResposta({ dataInicio, dataFim } = {}) {
   return ordem.filter(f => fm[f]).map(f => ({ faixa: f, total: fm[f] }));
 }
 
-// ── Picos de atendimento ────────────────────────────────
+// ── Picos de atendimento (legado) ───────────────────────
 
 async function picosAtendimento({ dataInicio, dataFim } = {}) {
-  const h = await _getHorarioOperacao();
   const resultado = await query(`
     SELECT EXTRACT(HOUR FROM t.criado_em AT TIME ZONE 'America/Bahia') as hora,
       COUNT(t.id) as tickets, COUNT(DISTINCT t.usuario_id) as atendentes_ativos,
       ROUND(AVG(t.tempo_primeira_resposta_seg) FILTER (WHERE t.tempo_primeira_resposta_seg IS NOT NULL)) as tpr_medio,
       ROUND(AVG(t.tempo_resolucao_seg) FILTER (WHERE t.tempo_resolucao_seg IS NOT NULL)) as tr_medio
     FROM tickets t WHERE t.criado_em >= $1::DATE AND t.criado_em < ($2::DATE + INTERVAL '1 day')
-      AND EXTRACT(HOUR FROM t.criado_em AT TIME ZONE 'America/Bahia') BETWEEN $3 AND $4
+      AND ${HC_TICKETS_T}
     GROUP BY 1 ORDER BY 1
-  `, [dataInicio, dataFim, h.abertura, h.fechamento]);
+  `, [dataInicio, dataFim]);
   const d1 = new Date(dataFim); const d0 = new Date(dataInicio);
   const totalDias = Math.max(Math.ceil((d1 - d0) / 86400000), 1);
   return resultado.rows.map(r => ({
@@ -205,39 +218,26 @@ async function picosAtendimento({ dataInicio, dataFim } = {}) {
 // ── Volume por hora/dia (heatmap) ───────────────────────
 
 async function volumePorHoraDia({ dias = 30 } = {}) {
-  const h = await _getHorarioOperacao();
   const resultado = await query(`
     SELECT EXTRACT(DOW FROM criado_em AT TIME ZONE 'America/Bahia') as dia_semana,
       EXTRACT(HOUR FROM criado_em AT TIME ZONE 'America/Bahia') as hora, COUNT(*) as total
-    FROM tickets WHERE criado_em >= NOW() - ($1 || ' days')::INTERVAL
-      AND EXTRACT(HOUR FROM criado_em AT TIME ZONE 'America/Bahia') BETWEEN $2 AND $3
+    FROM tickets WHERE criado_em >= NOW() - ($1 || ' days')::INTERVAL AND ${HC_TICKETS}
     GROUP BY 1, 2 ORDER BY 1, 2
-  `, [dias, h.abertura, h.fechamento]);
+  `, [dias]);
   return resultado.rows;
 }
 
 // ── Detalhe por atendente ───────────────────────────────
 
 async function detalheAtendente(userId, { dias = 30 } = {}) {
-  const resumo = await query(`
-    SELECT u.id, u.nome, u.avatar_url, u.online, u.email, u.perfil,
-      COUNT(t.id) FILTER (WHERE t.status IN ('aberto','aguardando')) as ativos
-    FROM usuarios u LEFT JOIN tickets t ON t.usuario_id = u.id WHERE u.id = $1 GROUP BY u.id
-  `, [userId]);
-  const ciclos = await query(`
-    SELECT COUNT(*) as concluidos,
-      ROUND(AVG(tempo_primeira_resposta_seg) FILTER (WHERE tempo_primeira_resposta_seg IS NOT NULL)) as tpr_medio,
-      ROUND(AVG(tempo_resolucao_seg) FILTER (WHERE tempo_resolucao_seg IS NOT NULL)) as tma_medio
-    FROM ticket_ciclos WHERE usuario_id = $1 AND fechado_em >= NOW() - ($2 || ' days')::INTERVAL
-  `, [userId, dias]);
+  const resumo = await query(`SELECT u.id, u.nome, u.avatar_url, u.online, u.email, u.perfil, COUNT(t.id) FILTER (WHERE t.status IN ('aberto','aguardando')) as ativos FROM usuarios u LEFT JOIN tickets t ON t.usuario_id = u.id WHERE u.id = $1 GROUP BY u.id`, [userId]);
+  const ciclos = await query(`SELECT COUNT(*) as concluidos, ROUND(AVG(tempo_primeira_resposta_seg) FILTER (WHERE tempo_primeira_resposta_seg IS NOT NULL)) as tpr_medio, ROUND(AVG(tempo_resolucao_seg) FILTER (WHERE tempo_resolucao_seg IS NOT NULL)) as tma_medio FROM ticket_ciclos WHERE usuario_id = $1 AND fechado_em >= NOW() - ($2 || ' days')::INTERVAL AND ${HC_CICLOS}`, [userId, dias]);
   const andamento = await query(`SELECT COUNT(*) as total FROM tickets WHERE usuario_id = $1 AND status IN ('pendente','aberto','aguardando') AND criado_em >= NOW() - ($2 || ' days')::INTERVAL`, [userId, dias]);
-  const porDia = await query(`SELECT DATE(fechado_em AT TIME ZONE 'America/Bahia') as dia, COUNT(*) as total FROM ticket_ciclos WHERE usuario_id = $1 AND fechado_em >= NOW() - ($2 || ' days')::INTERVAL GROUP BY 1 ORDER BY 1`, [userId, dias]);
-  const porHora = await query(`SELECT EXTRACT(HOUR FROM fechado_em AT TIME ZONE 'America/Bahia') as hora, COUNT(*) as total FROM ticket_ciclos WHERE usuario_id = $1 AND fechado_em >= NOW() - ($2 || ' days')::INTERVAL GROUP BY 1 ORDER BY 1`, [userId, dias]);
-  const r = resumo.rows[0] || {};
-  const c = ciclos.rows[0] || {};
+  const porDia = await query(`SELECT DATE(fechado_em AT TIME ZONE 'America/Bahia') as dia, COUNT(*) as total FROM ticket_ciclos WHERE usuario_id = $1 AND fechado_em >= NOW() - ($2 || ' days')::INTERVAL AND ${HC_CICLOS} GROUP BY 1 ORDER BY 1`, [userId, dias]);
+  const porHora = await query(`SELECT EXTRACT(HOUR FROM fechado_em AT TIME ZONE 'America/Bahia') as hora, COUNT(*) as total FROM ticket_ciclos WHERE usuario_id = $1 AND fechado_em >= NOW() - ($2 || ' days')::INTERVAL AND ${HC_CICLOS} GROUP BY 1 ORDER BY 1`, [userId, dias]);
+  const r = resumo.rows[0] || {}; const c = ciclos.rows[0] || {};
   r.chamados = (parseInt(c.concluidos) || 0) + (parseInt(andamento.rows[0]?.total) || 0);
-  r.tpr_medio = parseInt(c.tpr_medio) || 0;
-  r.tma_medio = parseInt(c.tma_medio) || 0;
+  r.tpr_medio = parseInt(c.tpr_medio) || 0; r.tma_medio = parseInt(c.tma_medio) || 0;
   return { resumo: r, por_dia: porDia.rows, por_hora: porHora.rows };
 }
 
@@ -246,29 +246,55 @@ async function detalheAtendente(userId, { dias = 30 } = {}) {
 async function contatosUnicos({ dataInicio, dataFim } = {}) {
   const resultado = await query(`
     SELECT DATE(t.criado_em AT TIME ZONE 'America/Bahia') as dia, COUNT(DISTINCT t.contato_id) as unicos
-    FROM tickets t WHERE t.criado_em >= $1::DATE AND t.criado_em < ($2::DATE + INTERVAL '1 day')
+    FROM tickets t WHERE t.criado_em >= $1::DATE AND t.criado_em < ($2::DATE + INTERVAL '1 day') AND ${HC_TICKETS_T}
     GROUP BY 1 ORDER BY 1
   `, [dataInicio, dataFim]);
-  const total = await query(`SELECT COUNT(DISTINCT contato_id) as total FROM tickets WHERE criado_em >= $1::DATE AND criado_em < ($2::DATE + INTERVAL '1 day')`, [dataInicio, dataFim]);
+  const total = await query(`SELECT COUNT(DISTINCT contato_id) as total FROM tickets WHERE criado_em >= $1::DATE AND criado_em < ($2::DATE + INTERVAL '1 day') AND ${HC_TICKETS}`, [dataInicio, dataFim]);
   return { total: parseInt(total.rows[0].total) || 0, por_dia: resultado.rows };
 }
 
-// ── TMA e TPR por dia ───────────────────────────────────
+// ── TMA e TPR por HORA do dia (8-19, seg-sex + sáb 8-12) ─
 
-async function temposPorDia({ dataInicio, dataFim } = {}) {
+async function temposPorHora({ dataInicio, dataFim } = {}) {
   const ciclos = await query(`
-    SELECT DATE(fechado_em AT TIME ZONE 'America/Bahia') as dia,
+    SELECT
+      EXTRACT(HOUR FROM fechado_em AT TIME ZONE 'America/Bahia')::int as hora,
+      COUNT(*) as chamados,
       ROUND(AVG(tempo_resolucao_seg) FILTER (WHERE tempo_resolucao_seg IS NOT NULL)) as tma_medio,
       ROUND(AVG(tempo_primeira_resposta_seg) FILTER (WHERE tempo_primeira_resposta_seg IS NOT NULL)) as tpr_medio
-    FROM ticket_ciclos WHERE fechado_em >= $1::DATE AND fechado_em < ($2::DATE + INTERVAL '1 day')
+    FROM ticket_ciclos
+    WHERE fechado_em >= $1::DATE AND fechado_em < ($2::DATE + INTERVAL '1 day') AND ${HC_CICLOS}
     GROUP BY 1 ORDER BY 1
   `, [dataInicio, dataFim]);
+
   const geral = await query(`
     SELECT ROUND(AVG(tempo_resolucao_seg) FILTER (WHERE tempo_resolucao_seg IS NOT NULL)) as tma_geral,
       ROUND(AVG(tempo_primeira_resposta_seg) FILTER (WHERE tempo_primeira_resposta_seg IS NOT NULL)) as tpr_geral
-    FROM ticket_ciclos WHERE fechado_em >= $1::DATE AND fechado_em < ($2::DATE + INTERVAL '1 day')
+    FROM ticket_ciclos
+    WHERE fechado_em >= $1::DATE AND fechado_em < ($2::DATE + INTERVAL '1 day') AND ${HC_CICLOS}
   `, [dataInicio, dataFim]);
-  return { tma_geral: parseInt(geral.rows[0].tma_geral) || 0, tpr_geral: parseInt(geral.rows[0].tpr_geral) || 0, por_dia: ciclos.rows };
+
+  // Preencher todas as horas 8-18
+  const horaMap = {};
+  for (const r of ciclos.rows) horaMap[parseInt(r.hora)] = r;
+
+  const horas = [];
+  for (let h = 8; h <= 18; h++) {
+    const r = horaMap[h];
+    horas.push({
+      hora: h,
+      label: `${String(h).padStart(2, '0')}:00`,
+      chamados: r ? parseInt(r.chamados) : 0,
+      tma_medio: r ? parseInt(r.tma_medio) || 0 : 0,
+      tpr_medio: r ? parseInt(r.tpr_medio) || 0 : 0,
+    });
+  }
+
+  return {
+    tma_geral: parseInt(geral.rows[0].tma_geral) || 0,
+    tpr_geral: parseInt(geral.rows[0].tpr_geral) || 0,
+    por_hora: horas,
+  };
 }
 
 // ── Mensagens por dia ───────────────────────────────────
@@ -279,7 +305,7 @@ async function mensagensPorDia({ dataInicio, dataFim } = {}) {
       COUNT(*) FILTER (WHERE is_from_me = TRUE AND tipo != 'sistema') as enviadas,
       COUNT(*) FILTER (WHERE is_from_me = FALSE) as recebidas
     FROM mensagens WHERE tipo != 'sistema'
-      AND criado_em >= $1::DATE AND criado_em < ($2::DATE + INTERVAL '1 day')
+      AND criado_em >= $1::DATE AND criado_em < ($2::DATE + INTERVAL '1 day') AND ${HC_MSGS}
     GROUP BY 1 ORDER BY 1
   `, [dataInicio, dataFim]);
   const totais = await query(`
@@ -287,7 +313,7 @@ async function mensagensPorDia({ dataInicio, dataFim } = {}) {
       COUNT(*) FILTER (WHERE is_from_me = TRUE AND tipo != 'sistema') as enviadas,
       COUNT(*) FILTER (WHERE is_from_me = FALSE) as recebidas
     FROM mensagens WHERE tipo != 'sistema'
-      AND criado_em >= $1::DATE AND criado_em < ($2::DATE + INTERVAL '1 day')
+      AND criado_em >= $1::DATE AND criado_em < ($2::DATE + INTERVAL '1 day') AND ${HC_MSGS}
   `, [dataInicio, dataFim]);
   return {
     total: parseInt(totais.rows[0].total) || 0,
@@ -300,48 +326,37 @@ async function mensagensPorDia({ dataInicio, dataFim } = {}) {
 // ── Picos por hora (8h-19h) ─────────────────────────────
 
 async function picosHorario({ dataInicio, dataFim } = {}) {
-  // Usar mensagens de fechamento em ticket_ciclos (ciclos concluídos)
+  const aberturas = await query(`
+    SELECT EXTRACT(HOUR FROM criado_em AT TIME ZONE 'America/Bahia')::int as hora, COUNT(*) as total
+    FROM tickets
+    WHERE criado_em >= $1::DATE AND criado_em < ($2::DATE + INTERVAL '1 day') AND ${HC_TICKETS}
+    GROUP BY 1
+  `, [dataInicio, dataFim]);
+
   const ciclos = await query(`
     SELECT EXTRACT(HOUR FROM fechado_em AT TIME ZONE 'America/Bahia')::int as hora,
-      COUNT(*) as chamados,
+      COUNT(*) as concluidos,
       ROUND(AVG(tempo_primeira_resposta_seg) FILTER (WHERE tempo_primeira_resposta_seg IS NOT NULL)) as tpr_medio,
-      ROUND(AVG(tempo_resolucao_seg) FILTER (WHERE tempo_resolucao_seg IS NOT NULL)) as tma_medio,
       COUNT(DISTINCT usuario_id) as atendentes
     FROM ticket_ciclos
-    WHERE fechado_em >= $1::DATE AND fechado_em < ($2::DATE + INTERVAL '1 day')
-      AND EXTRACT(HOUR FROM fechado_em AT TIME ZONE 'America/Bahia') BETWEEN 8 AND 19
+    WHERE fechado_em >= $1::DATE AND fechado_em < ($2::DATE + INTERVAL '1 day') AND ${HC_CICLOS}
     GROUP BY 1
   `, [dataInicio, dataFim]);
 
-  // Também contar tickets criados (aberturas) por hora para ter noção de demanda
-  const aberturas = await query(`
-    SELECT EXTRACT(HOUR FROM criado_em AT TIME ZONE 'America/Bahia')::int as hora,
-      COUNT(*) as total
-    FROM tickets
-    WHERE criado_em >= $1::DATE AND criado_em < ($2::DATE + INTERVAL '1 day')
-      AND EXTRACT(HOUR FROM criado_em AT TIME ZONE 'America/Bahia') BETWEEN 8 AND 19
-    GROUP BY 1
-  `, [dataInicio, dataFim]);
-
-  const cicloMap = {};
-  for (const r of ciclos.rows) cicloMap[parseInt(r.hora)] = r;
-  const abertMap = {};
-  for (const r of aberturas.rows) abertMap[parseInt(r.hora)] = parseInt(r.total);
+  const abMap = {}; for (const r of aberturas.rows) abMap[parseInt(r.hora)] = parseInt(r.total);
+  const cMap = {}; for (const r of ciclos.rows) cMap[parseInt(r.hora)] = r;
 
   const horas = [];
-  for (let h = 8; h <= 19; h++) {
-    const c = cicloMap[h];
+  for (let h = 8; h <= 18; h++) {
+    const c = cMap[h];
     horas.push({
-      hora: h,
-      label: `${String(h).padStart(2, '0')}:00`,
-      chamados: abertMap[h] || 0,
-      concluidos: c ? parseInt(c.chamados) : 0,
+      hora: h, label: `${String(h).padStart(2, '0')}:00`,
+      chamados: abMap[h] || 0, concluidos: c ? parseInt(c.concluidos) : 0,
       tpr_medio: c ? parseInt(c.tpr_medio) || 0 : 0,
-      tma_medio: c ? parseInt(c.tma_medio) || 0 : 0,
       atendentes: c ? parseInt(c.atendentes) : 0,
     });
   }
   return horas;
 }
 
-module.exports = { obterDashboard, ticketsPorHora, ticketsPorDia, ticketsPorFila, performanceAtendentes, csatDistribuicao, temposResposta, picosAtendimento, detalheAtendente, volumePorHoraDia, contatosUnicos, temposPorDia, mensagensPorDia, picosHorario };
+module.exports = { obterDashboard, ticketsPorHora, ticketsPorDia, ticketsPorFila, performanceAtendentes, csatDistribuicao, temposResposta, picosAtendimento, detalheAtendente, volumePorHoraDia, contatosUnicos, temposPorHora, mensagensPorDia, picosHorario };
