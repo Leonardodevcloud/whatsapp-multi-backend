@@ -434,9 +434,8 @@ async function resolverTicket({ ticketId, usuarioId, ip, motivoId, motivoTexto }
   const ticket = await query(`SELECT * FROM tickets WHERE id = $1`, [tId]);
   if (ticket.rows.length === 0) throw new AppError(ERROS.NAO_ENCONTRADO, 404);
 
-  const tempoResolucao = Math.floor(
-    (Date.now() - new Date(ticket.rows[0].criado_em).getTime()) / 1000
-  );
+  const { calcularTempoComercial } = require('../../shared/businessTime');
+  const tempoResolucao = calcularTempoComercial(ticket.rows[0].criado_em, new Date());
 
   await query(
     `UPDATE tickets SET status = 'resolvido', tempo_resolucao_seg = $1, motivo_fechamento_id = $2, motivo_fechamento_texto = $3, assunto = NULL, assunto_cor = NULL, prioridade = NULL, atualizado_em = NOW() WHERE id = $4`,
@@ -483,7 +482,8 @@ async function fecharTicket({ ticketId, usuarioId, ip }) {
   const ticketData = await query(`SELECT contato_id, fila_id, criado_em, tempo_primeira_resposta_seg FROM tickets WHERE id = $1`, [tId]);
   const tk = ticketData.rows[0];
 
-  const tempoResolucao = tk ? Math.floor((Date.now() - new Date(tk.criado_em).getTime()) / 1000) : null;
+  const { calcularTempoComercial } = require('../../shared/businessTime');
+  const tempoResolucao = tk ? calcularTempoComercial(tk.criado_em, new Date()) : null;
 
   await query(
     `UPDATE tickets SET status = 'fechado', fechado_em = NOW(), atualizado_em = NOW(), tempo_resolucao_seg = COALESCE(tempo_resolucao_seg, $2), assunto = NULL, assunto_cor = NULL, prioridade = NULL WHERE id = $1`,
