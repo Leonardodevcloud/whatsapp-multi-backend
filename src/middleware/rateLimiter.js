@@ -1,40 +1,41 @@
 // src/middleware/rateLimiter.js
-// Rate limiting — por usuário JWT (não por IP, pois Vercel proxy compartilha IPs)
+// Rate limiting — por usuário JWT (não por IP, pois atendentes compartilham rede)
 
 const rateLimit = require('express-rate-limit');
 
-// Rate limit geral: 300 req/min POR USUÁRIO logado
+// Extrair user ID do cookie JWT (decode rápido sem verificar, só pra key)
+function _extractUserId(req) {
+  if (req.cookies?.access_token) {
+    try {
+      const payload = JSON.parse(Buffer.from(req.cookies.access_token.split('.')[1], 'base64').toString());
+      if (payload.id) return `user_${payload.id}`;
+    } catch {}
+  }
+  // Fallback: IP real (prefixo diferente pra não misturar pools)
+  return `ip_${req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip}`;
+}
+
+// Rate limit geral: 600 req/min POR USUÁRIO logado
 const limiteGeral = rateLimit({
   windowMs: 60 * 1000,
-  max: 300,
+  max: 600,
   standardHeaders: true,
   legacyHeaders: false,
   message: { erro: 'Muitas requisições. Tente novamente em instantes.' },
-  keyGenerator: (req) => {
-    // Extrair user ID do cookie JWT (decode sem verificar, só pra key)
-    if (req.cookies?.access_token) {
-      try {
-        const payload = JSON.parse(Buffer.from(req.cookies.access_token.split('.')[1], 'base64').toString());
-        if (payload.id) return `user_${payload.id}`;
-      } catch {}
-    }
-    // Fallback: IP real
-    return req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip;
-  },
+  keyGenerator: _extractUserId,
   skip: (req) => {
-    // Não limitar webhooks e health check
     return req.path === '/api/whatsapp/webhook' || req.path === '/health';
   },
 });
 
-// Rate limit para endpoints sensíveis: 120 req/min por usuário
+// Rate limit para endpoints sensíveis: 200 req/min por usuário
 const limiteSensivel = rateLimit({
   windowMs: 60 * 1000,
-  max: 120,
+  max: 200,
   standardHeaders: true,
   legacyHeaders: false,
   message: { erro: 'Muitas requisições neste endpoint. Aguarde.' },
-  keyGenerator: (req) => req.usuario?.id ? `user_${req.usuario.id}` : (req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip),
+  keyGenerator: (req) => req.usuario?.id ? `user_${req.usuario.id}` : _extractUserId(req),
 });
 
 // Rate limit para login: 20 tentativas/15min por IP real
