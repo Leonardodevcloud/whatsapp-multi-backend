@@ -1052,23 +1052,11 @@ async function reagirMensagem(mensagemId, emoji) {
 }
 
 async function deletarMensagem(mensagemId) {
-  const msg = await query(
-    `SELECT m.wa_message_id, m.ticket_id, m.is_from_me, c.telefone
-     FROM mensagens m JOIN tickets t ON t.id = m.ticket_id JOIN contatos c ON c.id = t.contato_id
-     WHERE m.id = $1`,
-    [mensagemId]
-  );
+  const msg = await query(`SELECT wa_message_id, ticket_id, is_from_me FROM mensagens WHERE id = $1`, [mensagemId]);
   if (msg.rows.length === 0) throw new AppError('Mensagem não encontrada', 404);
   if (!msg.rows[0].is_from_me) throw new AppError('Só é possível deletar mensagens enviadas por você', 400);
-
-  const { telefone } = msg.rows[0];
-  // Z-API delete-message precisa do telefone real, não LID
-  const ehGrupo = telefone && (telefone.startsWith('120363') || telefone.includes('-'));
-  const destino = ehGrupo
-    ? (telefone.includes('-group') ? telefone : `${telefone}-group`)
-    : telefone;
-
-  await conexaoWA.deletarMensagem(msg.rows[0].wa_message_id, destino);
+  const telefone = await _obterDestinoDoTicket(msg.rows[0].ticket_id);
+  await conexaoWA.deletarMensagem(msg.rows[0].wa_message_id, telefone);
   await query(`UPDATE mensagens SET deletada = TRUE, deletada_por = 'atendente' WHERE id = $1`, [mensagemId]);
 
   const { invalidarCacheMensagens } = require('../messages/messages.service');
@@ -1251,11 +1239,7 @@ async function editarMensagem({ mensagemId, novoTexto, usuarioId }) {
 
   if (!wa_message_id || wa_message_id === 'sent') throw new AppError('Mensagem sem ID do WhatsApp', 400);
 
-  // Z-API update-message e delete-message precisam do telefone real, não LID
-  const ehGrupo = telefone && (telefone.startsWith('120363') || telefone.includes('-'));
-  const destino = ehGrupo 
-    ? (telefone.includes('-group') ? telefone : `${telefone}-group`)
-    : telefone;
+  const destino = lid ? `${lid}@lid` : telefone;
 
   // Editar no WhatsApp via Z-API (send-text com editMessageId)
   await conexaoWA.editarMensagem(wa_message_id, destino, novoTexto);
